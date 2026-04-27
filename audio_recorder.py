@@ -1,0 +1,480 @@
+"""
+核心录音模块 - 使用 WASAPI Loopback 录制系统音频
+"""
+import threading
+import wave
+import os
+import sys
+import time
+import platform
+from datetime import datetime
+from typing import Callable, Optional
+import numpy as np
+import sounddevice as sd
+
+
+class AudioRecorder:
+    """音频录制器 - 捕获系统输出音频（WASAPI Loopback）"""
+    
+    def __init__(self, 
+                 sample_rate: int = 44100,
+                 channels: int = 2,
+                 chunk_duration: float = 0.1,
+                 output_dir: str = "recordings"):
+        """
+        初始化录音器
+        
+        Args:
+            sample_rate: 采样率 (Hz)
+            channels: 声道数 (1=单声道, 2=立体声)
+            chunk_duration: 每次读取音频块的时长 (秒)
+            output_dir: 录音文件保存目录
+        """
+        self.sample_rate = sample_rate
+        self.channels = channels
+        self.chunk_size = int(sample_rate * chunk_duration)
+        self.output_dir = output_dir
+        
+        # 确保输出目录存在
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # 录音状态
+        self.is_recording = False
+        self.is_paused = False
+        self.frames = []
+        self.recording_thread: Optional[threading.Thread] = None
+        self.start_time: Optional[float] = None
+        self.pause_start_time: Optional[float] = None
+        self.total_pause_duration = 0.0
+        
+        # 回调函数
+        self.on_status_change: Optional[Callable[[str], None]] = None
+        self.on_duration_update: Optional[Callable[[float], None]] = None
+        self.on_error: Optional[Callable[[str], None]] = None
+        
+        # 录音文件信息
+        self.current_filename: Optional[str] = None
+        self.current_filepath: Optional[str] = None
+        
+    def _get_default_loopback_device(self) -> dict:
+        """获取默认的 WASAPI Loopback 设备"""
+        try:
+            # 查询所有设备
+            devices = sd.query_devices()
+            hostapis = sd.query_hostapis()
+            
+            # 找到 WASAPI hostapi 的索引
+            wasapi_index = None
+            for i, api in enumerate(hostapis):
+                if 'wasapi' in api.get('name', '').lower() or api.get('name') == 'Windows WASAPI':
+                    wasapi_index = i
+                    break
+            
+            # Windows 平台：查找 Loopback 设备
+            if os.name == 'nt' and wasapi_index is not None:
+                # 首先尝试找到默认输出设备的 Loopback
+                try:
+                    default_output = sd.query_devices(kind='output')
+                    if default_output:
+                        device_index = default_output['index']
+                        # 查找对应的 Loopback 设备
+                        for device in devices:
+                            if device.get('hostapi') == wasapi_index:
+                                device_name = device.get('name', '')
+                                if 'Loopback' in device_name:
+                                    return device
+                except Exception:
+                    pass
+                
+                # 回退：查找任何 WASAPI Loopback 设备
+                for device in devices:
+                    if device.get('hostapi') == wasapi_index:
+                        device_name = device.get('name', '')
+                        if 'Loopback' in device_name or '扬声器' in device_name or 'Speakers' in device_name:
+                            return device
+            
+            # 非 Windows 或找不到 Loopback：使用默认输入设备
+            default_input = sd.query_devices(kind='input')
+            if default_input:
+                return default_input
+                    
+            raise RuntimeError("未找到可用的音频设备")
+            
+        except Exception as e:
+            raise RuntimeError(f"获取音频设备失败: {e}")
+    
+    def _record_audio(self):
+        """录音线程主函数"""
+        try:
+            device = self._get_default_loopback_device()
+            device_id = device['index']
+            
+            def audio_callback(indata, frames, time_info, status):
+                if status:
+                    print(f"音频状态: {status}")
+                if self.is_recording and not self.is_paused:
+                    # 将音频数据转换为 int16
+                    audio_data = (indata * 32767).astype(np.int16)
+                    self.frames.append(audio_data.copy())
+            
+            # 打开音频流
+            with sd.InputStream(
+                device=device_id,
+                channels=self.channels,
+                samplerate=self.sample_rate,
+                dtype=np.float32,
+                blocksize=self.chunk_size,
+                callback=audio_callback
+            ):
+                self._notify_status("recording")
+                
+                while self.is_recording:
+                    if not self.is_paused:
+                        # 计算录音时长
+                        elapsed = time.time() - self.start_time - self.total_pause_duration
+                        if self.on_duration_update:
+                            self.on_duration_update(elapsed)
+                    time.sleep(0.1)
+                    
+        except Exception as e:
+            error_msg = f"录音错误: {str(e)}"
+            print(error_msg)
+            if self.on_error:
+                self.on_error(error_msg)
+            self.is_recording = False
+            self._notify_status("error")
+    
+    def _notify_status(self, status: str):
+        """通知状态变更"""
+        if self.on_status_change:
+            self.on_status_change(status)
+    
+    def start_recording(self, filename: Optional[str] = None) -> str:
+        """
+        开始录音
+        
+        Args:
+            filename: 自定义文件名（不含扩展名），默认使用时间戳
+            
+        Returns:
+            录音文件的完整路径
+        """
+        if self.is_recording:
+            raise RuntimeError("录音已在进行中")
+        
+        # 生成文件名
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"wechat_call_{timestamp}"
+        
+        self.current_filename = f"{filename}.wav"
+        self.current_filepath = os.path.join(self.output_dir, self.current_filename)
+        
+        # 重置状态
+        self.frames = []
+        self.is_recording = True
+        self.is_paused = False
+        self.start_time = time.time()
+        self.total_pause_duration = 0.0
+        
+        # 启动录音线程
+        self.recording_thread = threading.Thread(target=self._record_audio)
+        self.recording_thread.start()
+        
+        return self.current_filepath
+    
+    def pause_recording(self):
+        """暂停录音"""
+        if self.is_recording and not self.is_paused:
+            self.is_paused = True
+            self.pause_start_time = time.time()
+            self._notify_status("paused")
+    
+    def resume_recording(self):
+        """恢复录音"""
+        if self.is_recording and self.is_paused:
+            self.is_paused = False
+            if self.pause_start_time:
+                self.total_pause_duration += time.time() - self.pause_start_time
+                self.pause_start_time = None
+            self._notify_status("recording")
+    
+    def stop_recording(self) -> str:
+        """
+        停止录音并保存文件
+        
+        Returns:
+            保存的文件路径
+        """
+        if not self.is_recording:
+            raise RuntimeError("没有正在进行的录音")
+        
+        self.is_recording = False
+        
+        # 等待录音线程结束
+        if self.recording_thread and self.recording_thread.is_alive():
+            self.recording_thread.join(timeout=2.0)
+        
+        # 保存录音文件
+        if self.frames:
+            self._save_wav()
+        
+        self._notify_status("stopped")
+        
+        return self.current_filepath
+    
+    def _save_wav(self):
+        """保存为 WAV 文件"""
+        if not self.frames:
+            return
+        
+        try:
+            # 合并所有音频帧
+            audio_data = np.concatenate(self.frames, axis=0)
+            
+            # 确保输出目录存在
+            os.makedirs(os.path.dirname(self.current_filepath) or '.', exist_ok=True)
+            
+            # 保存为 WAV
+            with wave.open(self.current_filepath, 'wb') as wf:
+                wf.setnchannels(self.channels)
+                wf.setsampwidth(2)  # 16-bit = 2 bytes
+                wf.setframerate(self.sample_rate)
+                wf.writeframes(audio_data.tobytes())
+            
+            print(f"录音已保存: {self.current_filepath}")
+            
+        except Exception as e:
+            print(f"保存录音失败: {e}")
+            raise RuntimeError(f"保存录音文件失败: {e}")
+    
+    def get_recording_info(self) -> dict:
+        """
+        获取当前录音信息
+        
+        Returns:
+            包含录音信息的字典
+        """
+        info = {
+            'is_recording': self.is_recording,
+            'is_paused': self.is_paused,
+            'filename': self.current_filename,
+            'filepath': self.current_filepath,
+            'duration': 0.0,
+            'file_size': 0
+        }
+        
+        if self.is_recording and self.start_time:
+            info['duration'] = time.time() - self.start_time - self.total_pause_duration
+        
+        if self.current_filepath and os.path.exists(self.current_filepath):
+            info['file_size'] = os.path.getsize(self.current_filepath)
+        
+        return info
+    
+    def convert_to_mp3(self, wav_path: str, mp3_path: Optional[str] = None) -> str:
+        """
+        将 WAV 转换为 MP3（需要安装 ffmpeg）
+        
+        Args:
+            wav_path: WAV 文件路径
+            mp3_path: MP3 输出路径，默认为同名 .mp3
+            
+        Returns:
+            MP3 文件路径
+        """
+        if mp3_path is None:
+            mp3_path = wav_path.replace('.wav', '.mp3')
+        
+        try:
+            import subprocess
+            
+            # 构建 ffmpeg 命令
+            cmd = [
+                'ffmpeg', '-i', wav_path,
+                '-codec:a', 'libmp3lame',
+                '-qscale:a', '2',
+                '-y', mp3_path
+            ]
+            
+            # Windows 下使用 CREATE_NO_WINDOW 标志
+            if os.name == 'nt':
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                result = subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    startupinfo=startupinfo,
+                    encoding='utf-8',
+                    errors='ignore'
+                )
+            else:
+                result = subprocess.run(cmd, check=True, capture_output=True)
+            
+            return mp3_path
+        except subprocess.CalledProcessError as e:
+            error_msg = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+            raise RuntimeError(f"转换 MP3 失败: {error_msg}")
+        except FileNotFoundError:
+            raise RuntimeError("未找到 ffmpeg，请安装 ffmpeg 并添加到系统 PATH")
+        except Exception as e:
+            raise RuntimeError(f"转换 MP3 失败: {e}")
+
+
+class WeChatCallDetector:
+    """微信通话检测器"""
+    
+    # 微信进程名（Windows）
+    WECHAT_PROCESS_NAMES = ['WeChat.exe', 'WeChatApp.exe', 'wechat.exe']
+    
+    # 通话窗口标题关键词
+    CALL_WINDOW_KEYWORDS = [
+        '语音通话', '视频通话', 'Voice Call', 'Video Call',
+        '正在通话', '通话中', 'Calling'
+    ]
+    
+    def __init__(self, 
+                 check_interval: float = 2.0,
+                 on_call_start: Optional[Callable] = None,
+                 on_call_end: Optional[Callable] = None):
+        """
+        初始化检测器
+        
+        Args:
+            check_interval: 检测间隔（秒）
+            on_call_start: 通话开始回调
+            on_call_end: 通话结束回调
+        """
+        self.check_interval = check_interval
+        self.on_call_start = on_call_start
+        self.on_call_end = on_call_end
+        
+        self.is_running = False
+        self.is_in_call = False
+        self.detector_thread: Optional[threading.Thread] = None
+    
+    def _is_wechat_running(self) -> bool:
+        """检查微信是否在运行"""
+        try:
+            import psutil
+            for proc in psutil.process_iter(['name']):
+                if proc.info['name'] in self.WECHAT_PROCESS_NAMES:
+                    return True
+            return False
+        except Exception as e:
+            print(f"检查进程失败: {e}")
+            return False
+    
+    def _check_call_status(self) -> bool:
+        """
+        检查是否正在通话中
+        
+        Returns:
+            True 表示正在通话
+        """
+        try:
+            # Windows 平台：检查微信窗口标题
+            if os.name == 'nt':
+                return self._check_windows_call_status()
+            else:
+                # 其他平台：简化检测，仅检查进程
+                return self._is_wechat_running()
+        except Exception as e:
+            print(f"检查通话状态失败: {e}")
+            return False
+    
+    def _check_windows_call_status(self) -> bool:
+        """Windows 平台检查通话状态"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            # 枚举所有窗口
+            user32 = ctypes.windll.user32
+            
+            def enum_windows_callback(hwnd, extra):
+                if user32.IsWindowVisible(hwnd):
+                    # 获取窗口标题
+                    length = user32.GetWindowTextLengthW(hwnd)
+                    if length > 0:
+                        buffer = ctypes.create_unicode_buffer(length + 1)
+                        user32.GetWindowTextW(hwnd, buffer, length + 1)
+                        title = buffer.value
+                        
+                        # 检查是否是微信窗口且包含通话关键词
+                        for keyword in self.CALL_WINDOW_KEYWORDS:
+                            if keyword in title:
+                                extra.append(title)
+                                return False  # 找到就停止
+                return True
+            
+            EnumWindowsProc = ctypes.WINFUNCTYPE(
+                wintypes.BOOL,
+                wintypes.HWND,
+                ctypes.POINTER(ctypes.c_int)
+            )
+            
+            call_windows = []
+            callback = EnumWindowsProc(enum_windows_callback)
+            user32.EnumWindows(callback, ctypes.byref(ctypes.c_int(0)))
+            
+            return len(call_windows) > 0
+            
+        except Exception as e:
+            print(f"Windows 窗口检测失败: {e}")
+            # 回退：仅检查微信进程
+            return self._is_wechat_running()
+    
+    def _detection_loop(self):
+        """检测循环"""
+        while self.is_running:
+            try:
+                is_calling = self._check_call_status()
+                
+                if is_calling and not self.is_in_call:
+                    # 通话开始
+                    self.is_in_call = True
+                    print("检测到微信通话开始")
+                    if self.on_call_start:
+                        self.on_call_start()
+                        
+                elif not is_calling and self.is_in_call:
+                    # 通话结束
+                    self.is_in_call = False
+                    print("检测到微信通话结束")
+                    if self.on_call_end:
+                        self.on_call_end()
+                
+                time.sleep(self.check_interval)
+                
+            except Exception as e:
+                print(f"检测循环错误: {e}")
+                time.sleep(self.check_interval)
+    
+    def start_detection(self):
+        """开始检测"""
+        if self.is_running:
+            return
+        
+        self.is_running = True
+        self.detector_thread = threading.Thread(target=self._detection_loop)
+        self.detector_thread.daemon = True
+        self.detector_thread.start()
+        print("微信通话检测已启动")
+    
+    def stop_detection(self):
+        """停止检测"""
+        self.is_running = False
+        if self.detector_thread:
+            self.detector_thread.join(timeout=2.0)
+        print("微信通话检测已停止")
+    
+    def get_status(self) -> dict:
+        """获取检测器状态"""
+        return {
+            'is_running': self.is_running,
+            'is_in_call': self.is_in_call,
+            'wechat_running': self._is_wechat_running()
+        }
