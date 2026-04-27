@@ -269,9 +269,9 @@ try:
     self.log_text.setMaximumBlockCount(100)
 except AttributeError:
     pass
-        log_layout.addWidget(self.log_text)
+log_layout.addWidget(self.log_text)
         
-        layout.addWidget(log_group)
+layout.addWidget(log_group)
         
         # 设置布局比例
         layout.setStretch(0, 1)  # 状态
