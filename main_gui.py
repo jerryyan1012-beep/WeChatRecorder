@@ -262,17 +262,16 @@ class WeChatRecorderGUI(QMainWindow):
         log_group = QGroupBox("运行日志")
         log_layout = QVBoxLayout(log_group)
         
-        self.log_text = QTextEdit()
-self.log_text.setReadOnly(True)
-# 限制日志行数（兼容不同 PyQt6 版本）
-try:
-    self.log_text.setMaximumBlockCount(100)
-except AttributeError:
-    pass
-log_layout.addWidget(self.log_text)
+self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        # 限制日志行数（兼容不同 PyQt6 版本）
+        try:
+            self.log_text.setMaximumBlockCount(100)
+        except AttributeError:
+            pass
+        log_layout.addWidget(self.log_text)
         
-layout.addWidget(log_group)
-        
+        layout.addWidget(log_group)
         # 设置布局比例
         layout.setStretch(0, 1)  # 状态
         layout.setStretch(1, 2)  # 控制
