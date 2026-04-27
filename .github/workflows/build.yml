@@ -1,0 +1,35 @@
+name: Build WeChatRecorder
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号'
+        required: true
+        default: '1.0.0'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install PyQt6==6.6.1 PyQt6-Qt6==6.6.1
+        pip install pyinstaller pyaudio soundfile numpy psutil
+    - name: Build EXE
+      run: |
+        pip install pyinstaller
+        pyinstaller --onefile --windowed --name WeChatRecorder --hidden-import PyQt6 --hidden-import PyQt6.QtCore --hidden-import PyQt6.QtGui --hidden-import PyQt6.QtWidgets --collect-all PyQt6 main_gui.py
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: WeChatRecorder-EXE
+        path: dist/WeChatRecorder.exe
