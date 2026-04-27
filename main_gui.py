@@ -43,8 +43,13 @@ class RecordingThread(QThread):
         self.status_changed.emit(status)
     
     def run(self):
-        """线程运行（实际录音在 recorder 中处理）"""
-        pass
+        """线程运行 - 等待录音完成"""
+        # 等待录音器完成录音
+        while self.recorder.is_recording:
+            self.msleep(100)  # 使用 QThread 的 msleep 避免阻塞 GUI
+        
+        # 确保最终状态被更新
+        self.status_changed.emit("stopped")
 
 
 class WeChatRecorderGUI(QMainWindow):
@@ -394,6 +399,14 @@ class WeChatRecorderGUI(QMainWindow):
             filepath = self.recorder.stop_recording()
             self._log_message(f"录音已保存: {filepath}")
             
+            # 添加到录音列表并限制大小防止内存泄漏
+            self.recordings_list.append(filepath)
+            MAX_RECORDINGS = 1000  # 限制录音列表大小
+            if len(self.recordings_list) > MAX_RECORDINGS:
+                # 移除最旧的记录
+                self.recordings_list = self.recordings_list[-MAX_RECORDINGS:]
+                self._log_message(f"录音列表已清理，保留最近 {MAX_RECORDINGS} 条记录")
+            
             # 如果需要转换为 MP3
             if "MP3" in self.format_combo.currentText():
                 self._convert_to_mp3(filepath)
@@ -404,16 +417,28 @@ class WeChatRecorderGUI(QMainWindow):
     
     def _convert_to_mp3(self, wav_path: str):
         """转换为 MP3"""
+        import pathlib
+        
         try:
-            mp3_path = wav_path.replace('.wav', '.mp3')
+            # 路径验证 - 防止命令注入
+            wav_path_obj = pathlib.Path(wav_path).resolve()
+            if not wav_path_obj.exists():
+                raise RuntimeError(f"WAV 文件不存在: {wav_path}")
+            if not wav_path_obj.suffix.lower() == '.wav':
+                raise RuntimeError(f"文件必须是 WAV 格式: {wav_path}")
+            
+            mp3_path = str(wav_path_obj.with_suffix('.mp3'))
             self._log_message(f"正在转换为 MP3...")
             
-            result = subprocess.run([
-                'ffmpeg', '-i', wav_path,
+            # 使用列表传参避免命令注入
+            cmd = [
+                'ffmpeg', '-i', str(wav_path_obj),
                 '-codec:a', 'libmp3lame',
                 '-qscale:a', '2',
                 '-y', mp3_path
-            ], capture_output=True, text=True)
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode == 0:
                 self._log_message(f"MP3 转换完成: {mp3_path}")
@@ -512,7 +537,7 @@ class WeChatRecorderGUI(QMainWindow):
     
     def closeEvent(self, event):
         """关闭事件处理"""
-        # 停止检测器和录音
+        # 先停止检测器
         self.detector.stop_detection()
         
         if self.recorder.is_recording:
@@ -523,11 +548,22 @@ class WeChatRecorderGUI(QMainWindow):
             )
             
             if reply == QMessageBox.StandardButton.Yes:
-                self._stop_recording()
+                try:
+                    self._stop_recording()
+                    # 等待录音线程完全结束
+                    if self.recording_thread and self.recording_thread.isRunning():
+                        self.recording_thread.wait(3000)
+                except Exception as e:
+                    self._log_message(f"停止录音时出错: {e}")
                 event.accept()
             else:
+                # 用户取消退出，重新启动检测器
+                self.detector.start_detection()
                 event.ignore()
         else:
+            # 确保录音线程已清理
+            if self.recording_thread and self.recording_thread.isRunning():
+                self.recording_thread.wait(1000)
             event.accept()
 
 

@@ -110,12 +110,18 @@ class AudioRecorder:
             device_id = device['index']
             
             def audio_callback(indata, frames, time_info, status):
-                if status:
-                    print(f"音频状态: {status}")
-                if self.is_recording and not self.is_paused:
-                    # 将音频数据转换为 int16
-                    audio_data = (indata * 32767).astype(np.int16)
-                    self.frames.append(audio_data.copy())
+                try:
+                    if status:
+                        print(f"音频状态: {status}")
+                    if self.is_recording and not self.is_paused:
+                        # 将音频数据转换为 int16
+                        audio_data = (indata * 32767).astype(np.int16)
+                        self.frames.append(audio_data.copy())
+                except Exception as e:
+                    error_msg = f"音频回调错误: {str(e)}"
+                    print(error_msg)
+                    if self.on_error:
+                        self.on_error(error_msg)
             
             # 打开音频流
             with sd.InputStream(
@@ -211,13 +217,23 @@ class AudioRecorder:
         
         self.is_recording = False
         
-        # 等待录音线程结束
+        # 等待录音线程结束 - 改进线程结束处理
         if self.recording_thread and self.recording_thread.is_alive():
-            self.recording_thread.join(timeout=2.0)
+            self.recording_thread.join(timeout=5.0)  # 增加超时时间
+            if self.recording_thread.is_alive():
+                # 线程仍在运行，记录警告但继续处理
+                print("警告: 录音线程未能在超时时间内结束")
+        
+        # 清理线程引用
+        self.recording_thread = None
         
         # 保存录音文件
         if self.frames:
-            self._save_wav()
+            try:
+                self._save_wav()
+            except Exception as e:
+                print(f"保存录音文件失败: {e}")
+                raise
         
         self._notify_status("stopped")
         
@@ -283,20 +299,42 @@ class AudioRecorder:
         Returns:
             MP3 文件路径
         """
+        import subprocess
+        import pathlib
+        
+        # 路径验证 - 防止命令注入
+        wav_path_obj = pathlib.Path(wav_path).resolve()
+        if not wav_path_obj.exists():
+            raise RuntimeError(f"WAV 文件不存在: {wav_path}")
+        if not wav_path_obj.suffix.lower() == '.wav':
+            raise RuntimeError(f"文件必须是 WAV 格式: {wav_path}")
+        
+        # 验证路径在允许范围内（防止目录遍历）
+        output_dir = pathlib.Path(self.output_dir).resolve()
+        try:
+            wav_path_obj.relative_to(output_dir)
+        except ValueError:
+            raise RuntimeError(f"WAV 文件不在允许的输出目录中: {wav_path}")
+        
         if mp3_path is None:
-            mp3_path = wav_path.replace('.wav', '.mp3')
+            mp3_path = str(wav_path_obj.with_suffix('.mp3'))
+        else:
+            mp3_path_obj = pathlib.Path(mp3_path).resolve()
+            try:
+                mp3_path_obj.relative_to(output_dir)
+            except ValueError:
+                raise RuntimeError(f"MP3 输出路径不在允许的目录中: {mp3_path}")
+            mp3_path = str(mp3_path_obj)
+        
+        # 使用列表传参避免命令注入
+        cmd = [
+            'ffmpeg', '-i', str(wav_path_obj),
+            '-codec:a', 'libmp3lame',
+            '-qscale:a', '2',
+            '-y', mp3_path
+        ]
         
         try:
-            import subprocess
-            
-            # 构建 ffmpeg 命令
-            cmd = [
-                'ffmpeg', '-i', wav_path,
-                '-codec:a', 'libmp3lame',
-                '-qscale:a', '2',
-                '-y', mp3_path
-            ]
-            
             # Windows 下使用 CREATE_NO_WINDOW 标志
             if os.name == 'nt':
                 startupinfo = subprocess.STARTUPINFO()
@@ -394,31 +432,36 @@ class WeChatCallDetector:
             # 枚举所有窗口
             user32 = ctypes.windll.user32
             
-            def enum_windows_callback(hwnd, extra):
-                if user32.IsWindowVisible(hwnd):
-                    # 获取窗口标题
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buffer = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buffer, length + 1)
-                        title = buffer.value
-                        
-                        # 检查是否是微信窗口且包含通话关键词
-                        for keyword in self.CALL_WINDOW_KEYWORDS:
-                            if keyword in title:
-                                extra.append(title)
-                                return False  # 找到就停止
-                return True
+            call_windows = []
             
+            # 正确的 EnumWindowsProc 回调类型定义
             EnumWindowsProc = ctypes.WINFUNCTYPE(
                 wintypes.BOOL,
                 wintypes.HWND,
-                ctypes.POINTER(ctypes.c_int)
+                wintypes.LPARAM
             )
             
-            call_windows = []
+            def enum_windows_callback(hwnd, lparam):
+                try:
+                    if user32.IsWindowVisible(hwnd):
+                        # 获取窗口标题
+                        length = user32.GetWindowTextLengthW(hwnd)
+                        if length > 0:
+                            buffer = ctypes.create_unicode_buffer(length + 1)
+                            user32.GetWindowTextW(hwnd, buffer, length + 1)
+                            title = buffer.value
+                            
+                            # 检查是否是微信窗口且包含通话关键词
+                            for keyword in self.CALL_WINDOW_KEYWORDS:
+                                if keyword in title:
+                                    call_windows.append(title)
+                                    return False  # 找到就停止
+                except Exception as e:
+                    print(f"窗口枚举回调错误: {e}")
+                return True
+            
             callback = EnumWindowsProc(enum_windows_callback)
-            user32.EnumWindows(callback, ctypes.byref(ctypes.c_int(0)))
+            user32.EnumWindows(callback, 0)
             
             return len(call_windows) > 0
             
