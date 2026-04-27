@@ -262,7 +262,7 @@ class WeChatRecorderGUI(QMainWindow):
         log_group = QGroupBox("运行日志")
         log_layout = QVBoxLayout(log_group)
         
-self.log_text = QTextEdit()
+        self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         # 限制日志行数（兼容不同 PyQt6 版本）
         try:
