@@ -16,7 +16,7 @@ jobs:
     - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-    - run: pip install PyQt6 PyQt6-Qt6 pyaudio sounddevice soundfile numpy psutil pyinstaller
+    - run: pip install PyQt6==6.6.1 PyQt6-Qt6==6.6.1 pyaudio sounddevice soundfile numpy psutil pyinstaller
     - run: pyinstaller --onefile --console --name WeChatRecorder --collect-all PyQt6 --collect-all PyQt6-Qt6 main_gui.py
     - uses: actions/upload-artifact@v4
       with:
