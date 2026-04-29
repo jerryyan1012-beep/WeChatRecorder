@@ -268,12 +268,10 @@ class WeChatRecorderGUI(QMainWindow):
         try:
             self.log_text.setMaximumBlockCount(100)
         except AttributeError:
-            # 旧版本 PyQt6 不支持此方法，使用文档最大长度代替
-            self.log_text.setMaximumBlockCount(1000)
+            pass
         log_layout.addWidget(self.log_text)
         
         layout.addWidget(log_group)
-        
         # 设置布局比例
         layout.setStretch(0, 1)  # 状态
         layout.setStretch(1, 2)  # 控制
