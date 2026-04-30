@@ -138,11 +138,14 @@ class AudioRecorder:
             def audio_callback(indata, frames, time_info, status):
                 try:
                     if status:
-                        print(f"音频状态: {status}")
+                        print(f"音频状态警告: {status}")
                     if self.is_recording and not self.is_paused:
                         # 将音频数据转换为 int16
                         audio_data = (indata * 32767).astype(np.int16)
                         self.frames.append(audio_data.copy())
+                        # 每100帧打印一次调试信息
+                        if len(self.frames) % 100 == 0:
+                            print(f"已采集 {len(self.frames)} 帧音频数据")
                 except Exception as e:
                     error_msg = f"音频回调错误: {str(e)}"
                     print(error_msg)
@@ -256,10 +259,16 @@ class AudioRecorder:
         # 保存录音文件
         if self.frames:
             try:
+                print(f"正在保存录音，帧数: {len(self.frames)}, 总采样数: {sum(len(f) for f in self.frames)}")
                 self._save_wav()
             except Exception as e:
                 print(f"保存录音文件失败: {e}")
+                import traceback
+                traceback.print_exc()
                 raise
+        else:
+            print("警告: 没有采集到任何音频数据")
+            raise RuntimeError("录音失败：没有采集到任何音频数据，请检查音频设备")
         
         self._notify_status("stopped")
         

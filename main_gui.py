@@ -432,6 +432,13 @@ class WeChatRecorderGUI(QMainWindow):
             filepath = self.recorder.stop_recording()
             self._log_message(f"录音已保存: {filepath}")
             
+            # 检查文件是否真的存在
+            if os.path.exists(filepath):
+                file_size = os.path.getsize(filepath)
+                self._log_message(f"文件大小: {file_size / 1024:.1f} KB")
+            else:
+                self._log_message(f"警告: 文件未找到: {filepath}")
+            
             # 添加到录音列表并限制大小防止内存泄漏
             self.recordings_list.append(filepath)
             MAX_RECORDINGS = 1000  # 限制录音列表大小
