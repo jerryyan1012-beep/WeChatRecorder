@@ -397,12 +397,31 @@ class WeChatCallDetector:
         """检查微信是否在运行"""
         try:
             import psutil
-            for proc in psutil.process_iter(['name']):
-                if proc.info['name'] in self.WECHAT_PROCESS_NAMES:
-                    return True
-            return False
+            found_processes = []
+            for proc in psutil.process_iter(['name', 'pid']):
+                proc_name = proc.info['name']
+                if proc_name:
+                    # 不区分大小写匹配
+                    proc_name_lower = proc_name.lower()
+                    for wechat_name in self.WECHAT_PROCESS_NAMES:
+                        if wechat_name.lower() == proc_name_lower:
+                            found_processes.append(f"{proc_name} (PID: {proc.info['pid']})")
+                            return True
+            
+            # 调试信息：如果没有找到，打印所有进程名
+            if not found_processes:
+                print("调试：未找到微信进程，当前运行的进程包括:")
+                for proc in psutil.process_iter(['name']):
+                    if proc.info['name'] and 'wechat' in proc.info['name'].lower():
+                        print(f"  - {proc.info['name']}")
+            else:
+                print(f"找到微信进程: {found_processes}")
+            
+            return len(found_processes) > 0
         except Exception as e:
             print(f"检查进程失败: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def _check_call_status(self) -> bool:
@@ -501,11 +520,18 @@ class WeChatCallDetector:
         if self.is_running:
             return
         
+        # 先检查微信是否在运行
+        wechat_running = self._is_wechat_running()
+        
         self.is_running = True
         self.detector_thread = threading.Thread(target=self._detection_loop)
         self.detector_thread.daemon = True
         self.detector_thread.start()
-        print("微信通话检测已启动")
+        
+        if wechat_running:
+            print("微信通话检测已启动 (微信正在运行)")
+        else:
+            print("微信通话检测已启动 (未检测到微信进程，请确保微信已启动)")
     
     def stop_detection(self):
         """停止检测"""

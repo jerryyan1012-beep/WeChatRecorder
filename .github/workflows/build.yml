@@ -25,7 +25,7 @@ jobs:
     
     - name: Build EXE
       run: |
-        pyinstaller --onefile --console --name WeChatRecorder --collect-all PyQt6 --collect-all PyQt6-Qt6 main_gui.py
+        pyinstaller --onefile --windowed --name WeChatRecorder --collect-all PyQt6 --collect-all PyQt6-Qt6 main_gui.py
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
