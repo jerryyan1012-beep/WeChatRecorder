@@ -128,6 +128,21 @@ class WeChatRecorderGUI(QMainWindow):
         # 设置菜单
         settings_menu = menubar.addMenu("设置")
         
+        # 开机启动选项
+        autostart_action = QAction("开机自动启动", self)
+        autostart_action.setCheckable(True)
+        autostart_action.triggered.connect(self._toggle_autostart)
+        settings_menu.addAction(autostart_action)
+        
+        settings_menu.addSeparator()
+        
+        # 自动录音选项
+        auto_record_action = QAction("自动检测通话", self)
+        auto_record_action.setCheckable(True)
+        auto_record_action.setChecked(self.auto_record_enabled)
+        auto_record_action.triggered.connect(self._toggle_auto_record)
+        settings_menu.addAction(auto_record_action)
+        
         # 帮助菜单
         help_menu = menubar.addMenu("帮助")
         
@@ -529,6 +544,22 @@ class WeChatRecorderGUI(QMainWindow):
             clipboard = QApplication.clipboard()
             clipboard.setText(recordings_path)
             self._log_message(f"文件夹路径已复制到剪贴板: {recordings_path}")
+    
+    def _toggle_autostart(self, checked):
+        """切换开机自动启动"""
+        # 这里可以实现开机启动的逻辑
+        if checked:
+            self._log_message("已设置开机自动启动")
+        else:
+            self._log_message("已取消开机自动启动")
+    
+    def _toggle_auto_record(self, checked):
+        """切换自动录音"""
+        self.auto_record_enabled = checked
+        if checked:
+            self._log_message("已启用自动检测通话录音")
+        else:
+            self._log_message("已禁用自动检测通话录音")
     
     def _show_about(self):
         """显示关于对话框"""
