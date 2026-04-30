@@ -9,6 +9,16 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import platform
 
+# 获取应用程序根目录（处理 PyInstaller 打包后的路径）
+def get_app_root():
+    """获取应用程序根目录"""
+    if getattr(sys, 'frozen', False):
+        # PyInstaller 打包后的路径
+        return os.path.dirname(sys.executable)
+    else:
+        # 开发环境
+        return os.path.dirname(os.path.abspath(__file__))
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QComboBox, QSpinBox, QCheckBox, QTextEdit,
@@ -60,8 +70,13 @@ class WeChatRecorderGUI(QMainWindow):
         self.setWindowTitle("微信通话录音软件")
         self.setMinimumSize(600, 500)
         
-        # 初始化组件
-        self.recorder = AudioRecorder()
+        # 获取应用根目录并创建录音文件夹
+        self.app_root = get_app_root()
+        self.recordings_dir = os.path.join(self.app_root, "recordings")
+        os.makedirs(self.recordings_dir, exist_ok=True)
+        
+        # 初始化组件（使用正确的录音目录）
+        self.recorder = AudioRecorder(output_dir=self.recordings_dir)
         self.detector = WeChatCallDetector(
             on_call_start=self._on_call_detected_start,
             on_call_end=self._on_call_detected_end
@@ -498,7 +513,7 @@ class WeChatRecorderGUI(QMainWindow):
     
     def _open_recordings_folder(self):
         """打开录音文件夹"""
-        recordings_path = os.path.abspath("recordings")
+        recordings_path = self.recordings_dir
         os.makedirs(recordings_path, exist_ok=True)
         
         try:

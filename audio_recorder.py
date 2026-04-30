@@ -259,6 +259,7 @@ class AudioRecorder:
                 wf.writeframes(audio_data.tobytes())
             
             print(f"录音已保存: {self.current_filepath}")
+            print(f"文件大小: {os.path.getsize(self.current_filepath) / 1024:.1f} KB")
             
         except Exception as e:
             print(f"保存录音失败: {e}")
