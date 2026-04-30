@@ -56,8 +56,12 @@ class AudioRecorder:
         self.current_filename: Optional[str] = None
         self.current_filepath: Optional[str] = None
         
-    def _get_default_loopback_device(self) -> dict:
-        """获取默认的 WASAPI Loopback 设备"""
+    def _get_default_loopback_device(self) -> tuple:
+        """获取默认的 WASAPI Loopback 设备
+        
+        Returns:
+            (device_dict, channels) 设备信息和声道数
+        """
         try:
             # 查询所有设备
             devices = sd.query_devices()
@@ -69,6 +73,8 @@ class AudioRecorder:
                 if 'wasapi' in api.get('name', '').lower() or api.get('name') == 'Windows WASAPI':
                     wasapi_index = i
                     break
+            
+            selected_device = None
             
             # Windows 平台：查找 Loopback 设备
             if os.name == 'nt' and wasapi_index is not None:
@@ -82,23 +88,39 @@ class AudioRecorder:
                             if device.get('hostapi') == wasapi_index:
                                 device_name = device.get('name', '')
                                 if 'Loopback' in device_name:
-                                    return device
+                                    selected_device = device
+                                    break
                 except Exception:
                     pass
                 
                 # 回退：查找任何 WASAPI Loopback 设备
-                for device in devices:
-                    if device.get('hostapi') == wasapi_index:
-                        device_name = device.get('name', '')
-                        if 'Loopback' in device_name or '扬声器' in device_name or 'Speakers' in device_name:
-                            return device
+                if not selected_device:
+                    for device in devices:
+                        if device.get('hostapi') == wasapi_index:
+                            device_name = device.get('name', '')
+                            if 'Loopback' in device_name or '扬声器' in device_name or 'Speakers' in device_name:
+                                selected_device = device
+                                break
             
             # 非 Windows 或找不到 Loopback：使用默认输入设备
-            default_input = sd.query_devices(kind='input')
-            if default_input:
-                return default_input
-                    
-            raise RuntimeError("未找到可用的音频设备")
+            if not selected_device:
+                default_input = sd.query_devices(kind='input')
+                if default_input:
+                    selected_device = default_input
+            
+            if not selected_device:
+                raise RuntimeError("未找到可用的音频设备")
+            
+            # 获取设备支持的声道数
+            device_channels = selected_device.get('max_input_channels', 2)
+            # 如果设备是单声道，使用单声道；否则使用立体声
+            if device_channels == 1:
+                channels = 1
+            else:
+                channels = min(2, device_channels)  # 最多使用双声道
+            
+            print(f"选择音频设备: {selected_device.get('name', 'Unknown')}, 声道数: {channels}")
+            return selected_device, channels
             
         except Exception as e:
             raise RuntimeError(f"获取音频设备失败: {e}")
@@ -106,8 +128,12 @@ class AudioRecorder:
     def _record_audio(self):
         """录音线程主函数"""
         try:
-            device = self._get_default_loopback_device()
+            device, channels = self._get_default_loopback_device()
             device_id = device['index']
+            
+            # 更新声道数（使用设备支持的声道数）
+            self.channels = channels
+            print(f"开始录音: 设备={device.get('name', 'Unknown')}, 采样率={self.sample_rate}, 声道数={channels}")
             
             def audio_callback(indata, frames, time_info, status):
                 try:
@@ -126,7 +152,7 @@ class AudioRecorder:
             # 打开音频流
             with sd.InputStream(
                 device=device_id,
-                channels=self.channels,
+                channels=channels,
                 samplerate=self.sample_rate,
                 dtype=np.float32,
                 blocksize=self.chunk_size,
