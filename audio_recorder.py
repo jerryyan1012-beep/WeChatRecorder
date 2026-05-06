@@ -197,6 +197,8 @@ class AudioRecorder:
         if self.is_recording:
             raise RuntimeError("录音已在进行中")
         
+        print(f"开始录音初始化...")
+        
         # 生成文件名
         if filename is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -212,9 +214,14 @@ class AudioRecorder:
         self.start_time = time.time()
         self.total_pause_duration = 0.0
         
+        print(f"录音文件路径: {self.current_filepath}")
+        print(f"is_recording 设置为: {self.is_recording}")
+        
         # 启动录音线程
         self.recording_thread = threading.Thread(target=self._record_audio)
         self.recording_thread.start()
+        
+        print(f"录音线程已启动，线程ID: {self.recording_thread.ident}")
         
         return self.current_filepath
     
@@ -242,6 +249,9 @@ class AudioRecorder:
             保存的文件路径
         """
         if not self.is_recording:
+            print("警告: stop_recording 被调用但没有正在进行的录音")
+            # 确保状态一致
+            self._notify_status("stopped")
             raise RuntimeError("没有正在进行的录音")
         
         self.is_recording = False
@@ -257,20 +267,24 @@ class AudioRecorder:
         self.recording_thread = None
         
         # 保存录音文件
+        saved = False
         if self.frames:
             try:
                 print(f"正在保存录音，帧数: {len(self.frames)}, 总采样数: {sum(len(f) for f in self.frames)}")
                 self._save_wav()
+                saved = True
             except Exception as e:
                 print(f"保存录音文件失败: {e}")
                 import traceback
                 traceback.print_exc()
-                raise
         else:
             print("警告: 没有采集到任何音频数据")
-            raise RuntimeError("录音失败：没有采集到任何音频数据，请检查音频设备")
         
+        # 无论成功与否，都通知状态变更
         self._notify_status("stopped")
+        
+        if not saved:
+            raise RuntimeError("录音保存失败：没有采集到任何音频数据或保存出错")
         
         return self.current_filepath
     

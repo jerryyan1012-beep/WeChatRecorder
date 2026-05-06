@@ -402,6 +402,13 @@ class WeChatRecorderGUI(QMainWindow):
             self.pause_btn.setText("暂停")
             self.duration_label.setText("时长: 00:00:00")
             self.file_size_label.setText("文件大小: 0 KB")
+        elif status == "error":
+            self.status_bar.showMessage("录音出错")
+            self._log_message("录音过程发生错误")
+            self.start_btn.setEnabled(True)
+            self.pause_btn.setEnabled(False)
+            self.stop_btn.setEnabled(False)
+            self.pause_btn.setText("暂停")
     
     def _start_recording(self):
         """开始录音"""
@@ -428,6 +435,7 @@ class WeChatRecorderGUI(QMainWindow):
     
     def _stop_recording(self):
         """停止录音"""
+        filepath = None
         try:
             filepath = self.recorder.stop_recording()
             self._log_message(f"录音已保存: {filepath}")
@@ -454,6 +462,9 @@ class WeChatRecorderGUI(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "错误", f"停止录音失败: {str(e)}")
             self._log_message(f"错误: {str(e)}")
+        finally:
+            # 无论成功与否，都更新界面状态
+            self._update_recording_status("stopped")
     
     def _convert_to_mp3(self, wav_path: str):
         """转换为 MP3"""
@@ -518,16 +529,27 @@ class WeChatRecorderGUI(QMainWindow):
         """检测到通话结束"""
         self._log_message("检测到微信通话结束")
         
-        if self.auto_record_enabled and self.recorder.is_recording:
-            self._stop_recording()
-            
-            # 显示托盘通知
-            self.tray_icon.showMessage(
-                "微信通话录音",
-                "通话结束，录音已保存",
-                QSystemTrayIcon.MessageIcon.Information,
-                3000
-            )
+        if self.auto_record_enabled:
+            try:
+                # 检查是否正在录音
+                if self.recorder.is_recording:
+                    self._stop_recording()
+                    
+                    # 显示托盘通知
+                    self.tray_icon.showMessage(
+                        "微信通话录音",
+                        "通话结束，录音已保存",
+                        QSystemTrayIcon.MessageIcon.Information,
+                        3000
+                    )
+                else:
+                    self._log_message("通话结束，但没有正在进行的录音")
+                    # 确保界面状态正确
+                    self._update_recording_status("stopped")
+            except Exception as e:
+                self._log_message(f"处理通话结束时出错: {str(e)}")
+                # 确保界面状态正确
+                self._update_recording_status("stopped")
     
     def _on_format_changed(self, text: str):
         """输出格式改变"""
