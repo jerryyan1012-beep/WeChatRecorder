@@ -31,35 +31,29 @@ from PyQt6.QtGui import QAction, QIcon, QFont
 from audio_recorder import AudioRecorder, WeChatCallDetector
 
 
-class RecordingThread(QThread):
-    """录音工作线程"""
+class RecordingMonitor(QThread):
+    """录音监控线程 - 用于更新 UI"""
     duration_updated = pyqtSignal(float)
     status_changed = pyqtSignal(str)
     
     def __init__(self, recorder: AudioRecorder):
         super().__init__()
         self.recorder = recorder
-        self._setup_callbacks()
+        self._running = True
     
-    def _setup_callbacks(self):
-        """设置回调函数"""
-        self.recorder.on_duration_update = self._on_duration_update
-        self.recorder.on_status_change = self._on_status_change
-    
-    def _on_duration_update(self, duration: float):
-        self.duration_updated.emit(duration)
-    
-    def _on_status_change(self, status: str):
-        self.status_changed.emit(status)
+    def stop(self):
+        """停止监控"""
+        self._running = False
     
     def run(self):
-        """线程运行 - 等待录音完成"""
-        # 等待录音器完成录音
-        while self.recorder.is_recording:
-            self.msleep(100)  # 使用 QThread 的 msleep 避免阻塞 GUI
-        
-        # 确保最终状态被更新
-        self.status_changed.emit("stopped")
+        """线程运行 - 定期更新 UI"""
+        while self._running:
+            if self.recorder.is_recording:
+                # 获取录音信息
+                info = self.recorder.get_recording_info()
+                if info['duration'] > 0:
+                    self.duration_updated.emit(info['duration'])
+            self.msleep(100)  # 每 100ms 更新一次
 
 
 class WeChatRecorderGUI(QMainWindow):
@@ -81,11 +75,10 @@ class WeChatRecorderGUI(QMainWindow):
             on_call_start=self._on_call_detected_start,
             on_call_end=self._on_call_detected_end
         )
-        self.recording_thread = RecordingThread(self.recorder)
+        self.recording_monitor = RecordingMonitor(self.recorder)
         
         # 连接信号
-        self.recording_thread.duration_updated.connect(self._update_duration_display)
-        self.recording_thread.status_changed.connect(self._update_recording_status)
+        self.recording_monitor.duration_updated.connect(self._update_duration_display)
         
         # 状态变量
         self.auto_record_enabled = False
@@ -412,15 +405,26 @@ class WeChatRecorderGUI(QMainWindow):
     
     def _start_recording(self):
         """开始录音"""
+        self._log_message("[_start_recording] 准备开始录音...")
         try:
+            self._log_message(f"[_start_recording] 调用 recorder.start_recording()...")
             filepath = self.recorder.start_recording()
+            self._log_message(f"[_start_recording] start_recording 返回: {filepath}")
             self._log_message(f"开始录音: {os.path.basename(filepath)}")
             self._update_recording_status("recording")
             
             # 添加到录音列表
             self.recordings_list.append(filepath)
             
+            # 启动监控线程
+            self._log_message("[_start_recording] 启动监控线程...")
+            self.recording_monitor.start()
+            self._log_message(f"[_start_recording] 录音启动完成")
+            
         except Exception as e:
+            self._log_message(f"[_start_recording] 异常: {str(e)}")
+            import traceback
+            traceback.print_exc()
             QMessageBox.critical(self, "错误", f"开始录音失败: {str(e)}")
             self._log_message(f"错误: {str(e)}")
     
@@ -463,6 +467,13 @@ class WeChatRecorderGUI(QMainWindow):
             QMessageBox.critical(self, "错误", f"停止录音失败: {str(e)}")
             self._log_message(f"错误: {str(e)}")
         finally:
+            # 停止监控线程
+            self._log_message("[_stop_recording] 停止监控线程...")
+            self.recording_monitor.stop()
+            self.recording_monitor.wait(1000)  # 等待最多1秒
+            # 重新创建监控线程以便下次使用
+            self.recording_monitor = RecordingMonitor(self.recorder)
+            self.recording_monitor.duration_updated.connect(self._update_duration_display)
             # 无论成功与否，都更新界面状态
             self._update_recording_status("stopped")
     

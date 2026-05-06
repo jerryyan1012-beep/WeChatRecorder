@@ -269,9 +269,18 @@ class AudioRecorder:
         
         # 启动录音线程
         self.recording_thread = threading.Thread(target=self._record_audio)
+        self.recording_thread.daemon = True  # 设置为守护线程
         self.recording_thread.start()
         
         print(f"录音线程已启动，线程ID: {self.recording_thread.ident}")
+        
+        # 等待一小段时间检查线程是否还在运行
+        import time
+        time.sleep(0.5)
+        if not self.recording_thread.is_alive():
+            print("错误: 录音线程启动后立即退出")
+        else:
+            print(f"录音线程运行正常，is_recording={self.is_recording}")
         
         return self.current_filepath
     
