@@ -67,20 +67,38 @@ class AudioRecorder:
             devices = sd.query_devices()
             hostapis = sd.query_hostapis()
             
+            print(f"[_get_default_loopback_device] 可用 Host APIs: {[api.get('name') for api in hostapis]}")
+            print(f"[_get_default_loopback_device] 可用设备数: {len(devices)}")
+            
             # 找到 WASAPI hostapi 的索引
             wasapi_index = None
             for i, api in enumerate(hostapis):
-                if 'wasapi' in api.get('name', '').lower() or api.get('name') == 'Windows WASAPI':
+                api_name = api.get('name', '')
+                print(f"[_get_default_loopback_device] Host API {i}: {api_name}")
+                if 'wasapi' in api_name.lower() or api_name == 'Windows WASAPI':
                     wasapi_index = i
+                    print(f"[_get_default_loopback_device] 找到 WASAPI: index={i}")
                     break
             
             selected_device = None
             
             # Windows 平台：查找 Loopback 设备
             if os.name == 'nt' and wasapi_index is not None:
+                print(f"[_get_default_loopback_device] Windows 平台，查找 Loopback 设备...")
+                
+                # 列出所有 WASAPI 设备
+                print(f"[_get_default_loopback_device] WASAPI 设备列表:")
+                for device in devices:
+                    if device.get('hostapi') == wasapi_index:
+                        device_name = device.get('name', '')
+                        max_in = device.get('max_input_channels', 0)
+                        max_out = device.get('max_output_channels', 0)
+                        print(f"  - {device_name} (index={device['index']}, in={max_in}, out={max_out})")
+                
                 # 首先尝试找到默认输出设备的 Loopback
                 try:
                     default_output = sd.query_devices(kind='output')
+                    print(f"[_get_default_loopback_device] 默认输出设备: {default_output.get('name', 'Unknown')}")
                     if default_output:
                         device_index = default_output['index']
                         # 查找对应的 Loopback 设备
@@ -89,24 +107,29 @@ class AudioRecorder:
                                 device_name = device.get('name', '')
                                 if 'Loopback' in device_name:
                                     selected_device = device
+                                    print(f"[_get_default_loopback_device] 找到 Loopback 设备: {device_name}")
                                     break
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[_get_default_loopback_device] 查找默认输出设备失败: {e}")
                 
                 # 回退：查找任何 WASAPI Loopback 设备
                 if not selected_device:
+                    print(f"[_get_default_loopback_device] 尝试查找任何 Loopback 设备...")
                     for device in devices:
                         if device.get('hostapi') == wasapi_index:
                             device_name = device.get('name', '')
-                            if 'Loopback' in device_name or '扬声器' in device_name or 'Speakers' in device_name:
+                            if 'Loopback' in device_name:
                                 selected_device = device
+                                print(f"[_get_default_loopback_device] 找到 Loopback 设备(回退): {device_name}")
                                 break
             
             # 非 Windows 或找不到 Loopback：使用默认输入设备
             if not selected_device:
+                print(f"[_get_default_loopback_device] 使用默认输入设备...")
                 default_input = sd.query_devices(kind='input')
                 if default_input:
                     selected_device = default_input
+                    print(f"[_get_default_loopback_device] 使用默认输入: {selected_device.get('name', 'Unknown')}")
             
             if not selected_device:
                 raise RuntimeError("未找到可用的音频设备")
@@ -119,7 +142,7 @@ class AudioRecorder:
             else:
                 channels = min(2, device_channels)  # 最多使用双声道
             
-            print(f"选择音频设备: {selected_device.get('name', 'Unknown')}, 声道数: {channels}")
+            print(f"[_get_default_loopback_device] 最终选择: {selected_device.get('name', 'Unknown')}, 声道数: {channels}")
             return selected_device, channels
             
         except Exception as e:
@@ -133,25 +156,40 @@ class AudioRecorder:
             
             # 更新声道数（使用设备支持的声道数）
             self.channels = channels
-            print(f"开始录音: 设备={device.get('name', 'Unknown')}, 采样率={self.sample_rate}, 声道数={channels}")
+            print(f"[_record_audio] 开始录音初始化")
+            print(f"[_record_audio] 设备={device.get('name', 'Unknown')}, ID={device_id}")
+            print(f"[_record_audio] 采样率={self.sample_rate}, 声道数={channels}, 块大小={self.chunk_size}")
+            print(f"[_record_audio] is_recording={self.is_recording}")
+            
+            callback_count = [0]  # 使用列表来在闭包中修改
             
             def audio_callback(indata, frames, time_info, status):
                 try:
+                    callback_count[0] += 1
                     if status:
-                        print(f"音频状态警告: {status}")
+                        print(f"[_record_audio] 音频状态警告: {status}")
+                    
+                    # 打印前5次回调用于调试
+                    if callback_count[0] <= 5:
+                        print(f"[_record_audio] 回调 #{callback_count[0]}: is_recording={self.is_recording}, is_paused={self.is_paused}")
+                        print(f"[_record_audio] 回调 #{callback_count[0]}: indata shape={indata.shape}, dtype={indata.dtype}")
+                    
                     if self.is_recording and not self.is_paused:
                         # 将音频数据转换为 int16
                         audio_data = (indata * 32767).astype(np.int16)
                         self.frames.append(audio_data.copy())
                         # 每100帧打印一次调试信息
                         if len(self.frames) % 100 == 0:
-                            print(f"已采集 {len(self.frames)} 帧音频数据")
+                            print(f"[_record_audio] 已采集 {len(self.frames)} 帧音频数据")
                 except Exception as e:
-                    error_msg = f"音频回调错误: {str(e)}"
+                    error_msg = f"[_record_audio] 音频回调错误: {str(e)}"
                     print(error_msg)
+                    import traceback
+                    traceback.print_exc()
                     if self.on_error:
                         self.on_error(error_msg)
             
+            print(f"[_record_audio] 正在打开音频流...")
             # 打开音频流
             with sd.InputStream(
                 device=device_id,
@@ -160,20 +198,32 @@ class AudioRecorder:
                 dtype=np.float32,
                 blocksize=self.chunk_size,
                 callback=audio_callback
-            ):
+            ) as stream:
+                print(f"[_record_audio] 音频流已打开: active={stream.active}")
                 self._notify_status("recording")
                 
+                loop_count = 0
                 while self.is_recording:
+                    loop_count += 1
+                    if loop_count <= 10:  # 前10次循环打印调试信息
+                        print(f"[_record_audio] 主循环 #{loop_count}: is_recording={self.is_recording}, frames={len(self.frames)}")
+                    elif loop_count == 11:
+                        print(f"[_record_audio] 主循环继续运行中... (不再打印)")
+                    
                     if not self.is_paused:
                         # 计算录音时长
                         elapsed = time.time() - self.start_time - self.total_pause_duration
                         if self.on_duration_update:
                             self.on_duration_update(elapsed)
                     time.sleep(0.1)
+                
+                print(f"[_record_audio] 主循环结束，总循环次数={loop_count}, 总帧数={len(self.frames)}")
                     
         except Exception as e:
-            error_msg = f"录音错误: {str(e)}"
+            error_msg = f"[_record_audio] 录音错误: {str(e)}"
             print(error_msg)
+            import traceback
+            traceback.print_exc()
             if self.on_error:
                 self.on_error(error_msg)
             self.is_recording = False
