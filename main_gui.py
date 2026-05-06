@@ -639,9 +639,9 @@ class WeChatRecorderGUI(QMainWindow):
             if reply == QMessageBox.StandardButton.Yes:
                 try:
                     self._stop_recording()
-                    # 等待录音线程完全结束
-                    if self.recording_thread and self.recording_thread.isRunning():
-                        self.recording_thread.wait(3000)
+                    # 等待录音监控线程完全结束
+                    if self.recording_monitor and self.recording_monitor.isRunning():
+                        self.recording_monitor.wait(3000)
                 except Exception as e:
                     self._log_message(f"停止录音时出错: {e}")
                 event.accept()
@@ -650,9 +650,9 @@ class WeChatRecorderGUI(QMainWindow):
                 self.detector.start_detection()
                 event.ignore()
         else:
-            # 确保录音线程已清理
-            if self.recording_thread and self.recording_thread.isRunning():
-                self.recording_thread.wait(1000)
+            # 确保录音监控线程已清理
+            if self.recording_monitor and self.recording_monitor.isRunning():
+                self.recording_monitor.wait(1000)
             event.accept()
 
 
