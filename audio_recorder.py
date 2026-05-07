@@ -275,7 +275,6 @@ class AudioRecorder:
         print(f"录音线程已启动，线程ID: {self.recording_thread.ident}")
         
         # 等待一小段时间检查线程是否还在运行
-        import time
         time.sleep(0.5)
         if not self.recording_thread.is_alive():
             print("错误: 录音线程启动后立即退出")
