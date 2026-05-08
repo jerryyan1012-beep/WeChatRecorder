@@ -27,31 +27,16 @@ jobs:
     
     - name: Build EXE
       run: |
-        # 创建图标文件（使用 PowerShell 和 .NET）
-        $iconPath = "assets/icon.ico"
-        if (-not (Test-Path $iconPath)) {
-          # 创建简单的图标
-          Add-Type -AssemblyName System.Drawing
-          $bitmap = New-Object System.Drawing.Bitmap(256, 256)
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.Clear([System.Drawing.Color]::FromArgb(59, 130, 246))
-          $graphics.FillEllipse([System.Drawing.Brushes]::White, 103, 60, 50, 50)
-          $graphics.FillRoundedRectangle([System.Drawing.Brushes]::White, 108, 110, 40, 80, 10)
-          $graphics.FillRoundedRectangle([System.Drawing.Brushes]::White, 88, 200, 80, 20, 5)
-          $graphics.Dispose()
-          $icon = [System.Drawing.Icon]::FromHandle($bitmap.GetHicon())
-          $stream = [System.IO.FileStream]::new($iconPath, [System.IO.FileMode]::Create)
-          $icon.Save($stream)
-          $stream.Close()
-          $icon.Dispose()
-          $bitmap.Dispose()
+        # 确保资源目录存在
+        if (-not (Test-Path "assets")) {
+          New-Item -ItemType Directory -Path "assets" -Force
         }
         
-        # 构建带有版本信息和图标的 EXE
+        # 构建带有版本信息的 EXE
         pyinstaller --onefile --windowed --name WeChatRecorder `
-          --icon="assets/icon.ico" `
           --version-file="assets/version_info.txt" `
           --collect-all PyQt6 --collect-all PyQt6-Qt6 main_gui.py
+      shell: pwsh
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
