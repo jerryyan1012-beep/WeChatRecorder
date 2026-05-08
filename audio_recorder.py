@@ -1,5 +1,6 @@
 """
-核心录音模块 - 使用 WASAPI Loopback 录制系统音频
+核心录音模块 - 使用 WASAPI Loopback 录制系统音频 + 麦克风输入
+同时录制双方声音：麦克风（我方）+ 系统回环（对方）
 """
 import threading
 import wave
@@ -14,7 +15,14 @@ import sounddevice as sd
 
 
 class AudioRecorder:
-    """音频录制器 - 捕获系统输出音频（WASAPI Loopback）"""
+    """
+    音频录制器 - 同时录制麦克风和系统声音
+    
+    微信通话录音原理:
+    - 对方声音: 通过 WASAPI Loopback 录制系统输出（扬声器/耳机）
+    - 我方声音: 通过麦克风输入录制
+    - 最终混合成双声道立体声文件（左声道=对方，右声道=我方）
+    """
     
     def __init__(self, 
                  sample_rate: int = 44100,
@@ -26,7 +34,7 @@ class AudioRecorder:
         
         Args:
             sample_rate: 采样率 (Hz)
-            channels: 声道数 (1=单声道, 2=立体声)
+            channels: 声道数 (最终输出立体声的声道数)
             chunk_duration: 每次读取音频块的时长 (秒)
             output_dir: 录音文件保存目录
         """
@@ -41,7 +49,11 @@ class AudioRecorder:
         # 录音状态
         self.is_recording = False
         self.is_paused = False
-        self.frames = []
+        
+        # 两个音频流的帧数据
+        self.system_frames = []  # 系统声音帧 (对方)
+        self.mic_frames = []     # 麦克风声音帧 (我方)
+        
         self.recording_thread: Optional[threading.Thread] = None
         self.start_time: Optional[float] = None
         self.pause_start_time: Optional[float] = None
@@ -56,38 +68,40 @@ class AudioRecorder:
         self.current_filename: Optional[str] = None
         self.current_filepath: Optional[str] = None
         
-    def _get_default_loopback_device(self) -> tuple:
-        """获取默认的 WASAPI Loopback 设备
+        # 设备信息
+        self.system_device = None  # 系统输出设备 (Loopback)
+        self.mic_device = None     # 麦克风输入设备
+        
+    def _get_audio_devices(self) -> tuple:
+        """
+        获取音频设备
         
         Returns:
-            (device_dict, channels) 设备信息和声道数
+            (system_device, mic_device) 系统输出设备和麦克风设备
         """
         try:
-            # 查询所有设备
             devices = sd.query_devices()
             hostapis = sd.query_hostapis()
             
-            print(f"[_get_default_loopback_device] 可用 Host APIs: {[api.get('name') for api in hostapis]}")
-            print(f"[_get_default_loopback_device] 可用设备数: {len(devices)}")
+            print(f"[_get_audio_devices] 可用设备数: {len(devices)}")
             
             # 找到 WASAPI hostapi 的索引
             wasapi_index = None
             for i, api in enumerate(hostapis):
                 api_name = api.get('name', '')
-                print(f"[_get_default_loopback_device] Host API {i}: {api_name}")
                 if 'wasapi' in api_name.lower() or api_name == 'Windows WASAPI':
                     wasapi_index = i
-                    print(f"[_get_default_loopback_device] 找到 WASAPI: index={i}")
+                    print(f"[_get_audio_devices] 找到 WASAPI: index={i}")
                     break
             
-            selected_device = None
+            system_device = None
+            mic_device = None
             
-            # Windows 平台：查找 Loopback 设备
+            # Windows 平台：查找 Loopback 设备和麦克风
             if os.name == 'nt' and wasapi_index is not None:
-                print(f"[_get_default_loopback_device] Windows 平台，查找 Loopback 设备...")
+                print(f"[_get_audio_devices] Windows 平台，查找音频设备...")
                 
                 # 列出所有 WASAPI 设备
-                print(f"[_get_default_loopback_device] WASAPI 设备列表:")
                 for device in devices:
                     if device.get('hostapi') == wasapi_index:
                         device_name = device.get('name', '')
@@ -95,133 +109,140 @@ class AudioRecorder:
                         max_out = device.get('max_output_channels', 0)
                         print(f"  - {device_name} (index={device['index']}, in={max_in}, out={max_out})")
                 
-                # 首先尝试找到默认输出设备的 Loopback
-                try:
-                    default_output = sd.query_devices(kind='output')
-                    print(f"[_get_default_loopback_device] 默认输出设备: {default_output.get('name', 'Unknown')}")
-                    if default_output:
-                        device_index = default_output['index']
-                        # 查找对应的 Loopback 设备
-                        for device in devices:
-                            if device.get('hostapi') == wasapi_index:
-                                device_name = device.get('name', '')
-                                if 'Loopback' in device_name:
-                                    selected_device = device
-                                    print(f"[_get_default_loopback_device] 找到 Loopback 设备: {device_name}")
-                                    break
-                except Exception as e:
-                    print(f"[_get_default_loopback_device] 查找默认输出设备失败: {e}")
+                # 1. 查找 Loopback 设备 (系统输出)
+                for device in devices:
+                    if device.get('hostapi') == wasapi_index:
+                        device_name = device.get('name', '')
+                        if 'Loopback' in device_name:
+                            system_device = device
+                            print(f"[_get_audio_devices] 找到系统 Loopback 设备: {device_name}")
+                            break
                 
-                # 回退：查找任何 WASAPI Loopback 设备
-                if not selected_device:
-                    print(f"[_get_default_loopback_device] 尝试查找任何 Loopback 设备...")
-                    for device in devices:
-                        if device.get('hostapi') == wasapi_index:
-                            device_name = device.get('name', '')
-                            if 'Loopback' in device_name:
-                                selected_device = device
-                                print(f"[_get_default_loopback_device] 找到 Loopback 设备(回退): {device_name}")
-                                break
+                # 2. 查找麦克风输入设备
+                try:
+                    default_input = sd.query_devices(kind='input')
+                    if default_input:
+                        mic_device = default_input
+                        print(f"[_get_audio_devices] 找到麦克风: {mic_device.get('name', 'Unknown')}")
+                except Exception as e:
+                    print(f"[_get_audio_devices] 查找麦克风失败: {e}")
             
-            # 非 Windows 或找不到 Loopback：使用默认输入设备
-            if not selected_device:
-                print(f"[_get_default_loopback_device] 使用默认输入设备...")
-                default_input = sd.query_devices(kind='input')
-                if default_input:
-                    selected_device = default_input
-                    print(f"[_get_default_loopback_device] 使用默认输入: {selected_device.get('name', 'Unknown')}")
+            # 如果找不到 Loopback，尝试使用默认输入
+            if not system_device:
+                print(f"[_get_audio_devices] 未找到 Loopback，尝试使用默认输入...")
+                try:
+                    default_input = sd.query_devices(kind='input')
+                    if default_input:
+                        system_device = default_input
+                        print(f"[_get_audio_devices] 使用默认输入作为系统声音: {system_device.get('name', 'Unknown')}")
+                except Exception as e:
+                    print(f"[_get_audio_devices] 失败: {e}")
             
-            if not selected_device:
-                raise RuntimeError("未找到可用的音频设备")
+            # 如果找不到麦克风，使用系统设备作为后备
+            if not mic_device:
+                print(f"[_get_audio_devices] 未找到麦克风，将只录制系统声音")
             
-            # 获取设备支持的声道数
-            device_channels = selected_device.get('max_input_channels', 2)
-            # 如果设备是单声道，使用单声道；否则使用立体声
-            if device_channels == 1:
-                channels = 1
-            else:
-                channels = min(2, device_channels)  # 最多使用双声道
-            
-            print(f"[_get_default_loopback_device] 最终选择: {selected_device.get('name', 'Unknown')}, 声道数: {channels}")
-            return selected_device, channels
+            return system_device, mic_device
             
         except Exception as e:
             raise RuntimeError(f"获取音频设备失败: {e}")
     
     def _record_audio(self):
-        """录音线程主函数"""
-        stream = None
+        """录音线程主函数 - 同时录制系统声音和麦克风"""
+        system_stream = None
+        mic_stream = None
+        
         try:
-            device, channels = self._get_default_loopback_device()
-            device_id = device['index']
+            # 获取设备
+            system_device, mic_device = self._get_audio_devices()
             
-            # 更新声道数（使用设备支持的声道数）
-            self.channels = channels
-            print(f"[_record_audio] 开始录音初始化")
-            print(f"[_record_audio] 设备={device.get('name', 'Unknown')}, ID={device_id}")
-            print(f"[_record_audio] 采样率={self.sample_rate}, 声道数={channels}, 块大小={self.chunk_size}")
-            print(f"[_record_audio] is_recording={self.is_recording}")
+            if not system_device:
+                raise RuntimeError("未找到系统音频设备")
             
-            callback_count = 0  # 使用整数而非列表，避免闭包问题
+            system_id = system_device['index']
+            print(f"[_record_audio] 系统设备: {system_device.get('name', 'Unknown')} (ID={system_id})")
             
-            def audio_callback(indata, frames, time_info, status):
-                nonlocal callback_count  # 使用 nonlocal 而非列表
+            # 系统声音回调
+            def system_callback(indata, frames, time_info, status):
                 try:
-                    callback_count += 1
                     if status:
-                        print(f"[_record_audio] 音频状态警告: {status}")
-                    
-                    # 打印前5次回调用于调试
-                    if callback_count <= 5:
-                        print(f"[_record_audio] 回调 #{callback_count}: is_recording={self.is_recording}, is_paused={self.is_paused}")
-                        print(f"[_record_audio] 回调 #{callback_count}: indata shape={indata.shape}, dtype={indata.dtype}")
+                        print(f"[系统音频] 状态警告: {status}")
                     
                     if self.is_recording and not self.is_paused:
-                        # 将音频数据转换为 int16
+                        # 转换为 int16 并存储
                         audio_data = (indata * 32767).astype(np.int16)
-                        self.frames.append(audio_data.copy())
-                        # 每100帧打印一次调试信息
-                        if len(self.frames) % 100 == 0:
-                            print(f"[_record_audio] 已采集 {len(self.frames)} 帧音频数据")
+                        self.system_frames.append(audio_data.copy())
                 except Exception as e:
-                    error_msg = f"[_record_audio] 音频回调错误: {str(e)}"
+                    error_msg = f"[系统音频] 回调错误: {str(e)}"
                     print(error_msg)
-                    import traceback
-                    traceback.print_exc()
-                    if self.on_error:
-                        self.on_error(error_msg)
             
-            print(f"[_record_audio] 正在打开音频流...")
-            # 打开音频流
-            stream = sd.InputStream(
-                device=device_id,
-                channels=channels,
+            # 打开系统音频流
+            print(f"[_record_audio] 打开系统音频流...")
+            system_channels = min(2, system_device.get('max_input_channels', 2))
+            system_stream = sd.InputStream(
+                device=system_id,
+                channels=system_channels,
                 samplerate=self.sample_rate,
                 dtype=np.float32,
                 blocksize=self.chunk_size,
-                callback=audio_callback
+                callback=system_callback
             )
-            stream.start()
-            print(f"[_record_audio] 音频流已打开: active={stream.active}")
+            system_stream.start()
+            print(f"[_record_audio] 系统音频流已启动: 声道={system_channels}")
+            
+            # 如果有麦克风，同时录制
+            if mic_device:
+                mic_id = mic_device['index']
+                print(f"[_record_audio] 麦克风设备: {mic_device.get('name', 'Unknown')} (ID={mic_id})")
+                
+                def mic_callback(indata, frames, time_info, status):
+                    try:
+                        if status:
+                            print(f"[麦克风] 状态警告: {status}")
+                        
+                        if self.is_recording and not self.is_paused:
+                            audio_data = (indata * 32767).astype(np.int16)
+                            self.mic_frames.append(audio_data.copy())
+                    except Exception as e:
+                        error_msg = f"[麦克风] 回调错误: {str(e)}"
+                        print(error_msg)
+                
+                print(f"[_record_audio] 打开麦克风流...")
+                mic_channels = min(1, mic_device.get('max_input_channels', 1))  # 麦克风通常单声道
+                mic_stream = sd.InputStream(
+                    device=mic_id,
+                    channels=mic_channels,
+                    samplerate=self.sample_rate,
+                    dtype=np.float32,
+                    blocksize=self.chunk_size,
+                    callback=mic_callback
+                )
+                mic_stream.start()
+                print(f"[_record_audio] 麦克风流已启动: 声道={mic_channels}")
+            else:
+                print(f"[_record_audio] 没有麦克风，将只录制系统声音")
+            
             self._notify_status("recording")
             
+            # 主循环
             loop_count = 0
             while self.is_recording:
                 loop_count += 1
-                if loop_count <= 10:  # 前10次循环打印调试信息
-                    print(f"[_record_audio] 主循环 #{loop_count}: is_recording={self.is_recording}, frames={len(self.frames)}")
-                elif loop_count == 11:
-                    print(f"[_record_audio] 主循环继续运行中... (不再打印)")
+                if loop_count <= 5:
+                    print(f"[_record_audio] 录音中... 系统帧={len(self.system_frames)}, 麦克风帧={len(self.mic_frames)}")
+                elif loop_count == 6:
+                    print(f"[_record_audio] 录音持续进行中...")
                 
                 if not self.is_paused:
-                    # 计算录音时长
                     elapsed = time.time() - self.start_time - self.total_pause_duration
                     if self.on_duration_update:
                         self.on_duration_update(elapsed)
+                
                 time.sleep(0.1)
             
-            print(f"[_record_audio] 主循环结束，总循环次数={loop_count}, 总帧数={len(self.frames)}")
-                
+            print(f"[_record_audio] 录音结束，总循环次数={loop_count}")
+            print(f"[_record_audio] 系统帧数: {len(self.system_frames)}, 麦克风帧数: {len(self.mic_frames)}")
+            
         except Exception as e:
             error_msg = f"[_record_audio] 录音错误: {str(e)}"
             print(error_msg)
@@ -231,16 +252,26 @@ class AudioRecorder:
                 self.on_error(error_msg)
             self.is_recording = False
             self._notify_status("error")
+            
         finally:
-            # 确保音频流正确关闭
-            if stream is not None:
+            # 关闭音频流
+            if system_stream is not None:
                 try:
-                    print("[_record_audio] 正在关闭音频流...")
-                    stream.stop()
-                    stream.close()
-                    print("[_record_audio] 音频流已关闭")
+                    print("[_record_audio] 关闭系统音频流...")
+                    system_stream.stop()
+                    system_stream.close()
+                    print("[_record_audio] 系统音频流已关闭")
                 except Exception as e:
-                    print(f"[_record_audio] 关闭音频流时出错: {e}")
+                    print(f"[_record_audio] 关闭系统流时出错: {e}")
+            
+            if mic_stream is not None:
+                try:
+                    print("[_record_audio] 关闭麦克风流...")
+                    mic_stream.stop()
+                    mic_stream.close()
+                    print("[_record_audio] 麦克风流已关闭")
+                except Exception as e:
+                    print(f"[_record_audio] 关闭麦克风流时出错: {e}")
     
     def _notify_status(self, status: str):
         """通知状态变更"""
@@ -271,28 +302,21 @@ class AudioRecorder:
         self.current_filepath = os.path.join(self.output_dir, self.current_filename)
         
         # 重置状态
-        self.frames = []
+        self.system_frames = []
+        self.mic_frames = []
         self.is_recording = True
         self.is_paused = False
         self.start_time = time.time()
         self.total_pause_duration = 0.0
         
         print(f"录音文件路径: {self.current_filepath}")
-        print(f"is_recording 设置为: {self.is_recording}")
         
         # 启动录音线程
         self.recording_thread = threading.Thread(target=self._record_audio)
-        self.recording_thread.daemon = True  # 设置为守护线程
+        self.recording_thread.daemon = True
         self.recording_thread.start()
         
-        print(f"录音线程已启动，线程ID: {self.recording_thread.ident}")
-        
-        # 等待一小段时间检查线程是否还在运行
-        time.sleep(0.5)
-        if not self.recording_thread.is_alive():
-            print("错误: 录音线程启动后立即退出")
-        else:
-            print(f"录音线程运行正常，is_recording={self.is_recording}")
+        print(f"录音线程已启动")
         
         return self.current_filepath
     
@@ -321,17 +345,15 @@ class AudioRecorder:
         """
         if not self.is_recording:
             print("警告: stop_recording 被调用但没有正在进行的录音")
-            # 确保状态一致
             self._notify_status("stopped")
             raise RuntimeError("没有正在进行的录音")
         
         self.is_recording = False
         
-        # 等待录音线程结束 - 改进线程结束处理
+        # 等待录音线程结束
         if self.recording_thread and self.recording_thread.is_alive():
-            self.recording_thread.join(timeout=5.0)  # 增加超时时间
+            self.recording_thread.join(timeout=5.0)
             if self.recording_thread.is_alive():
-                # 线程仍在运行，记录警告但继续处理
                 print("警告: 录音线程未能在超时时间内结束")
         
         # 清理线程引用
@@ -339,9 +361,11 @@ class AudioRecorder:
         
         # 保存录音文件
         saved = False
-        if self.frames:
+        if self.system_frames or self.mic_frames:
             try:
-                print(f"正在保存录音，帧数: {len(self.frames)}, 总采样数: {sum(len(f) for f in self.frames)}")
+                print(f"正在保存录音...")
+                print(f"  系统声音帧数: {len(self.system_frames)}")
+                print(f"  麦克风帧数: {len(self.mic_frames)}")
                 self._save_wav()
                 saved = True
             except Exception as e:
@@ -351,20 +375,19 @@ class AudioRecorder:
         else:
             print("警告: 没有采集到任何音频数据")
         
-        # 清理帧数据释放内存（关键修复：防止内存泄漏）
-        print(f"[stop_recording] 清理帧数据，释放内存...")
-        self.frames = []
+        # 清理帧数据释放内存
+        print(f"[stop_recording] 清理帧数据...")
+        self.system_frames = []
+        self.mic_frames = []
         import gc
         gc.collect()
-        print(f"[stop_recording] 内存已释放")
         
-        # 重置其他状态变量
+        # 重置状态变量
         self.start_time = None
         self.pause_start_time = None
         self.total_pause_duration = 0.0
         self.is_paused = False
         
-        # 无论成否与否，都通知状态变更
         self._notify_status("stopped")
         
         if not saved:
@@ -373,26 +396,71 @@ class AudioRecorder:
         return self.current_filepath
     
     def _save_wav(self):
-        """保存为 WAV 文件"""
-        if not self.frames:
+        """
+        保存为 WAV 文件 - 将系统声音和麦克风混合成双声道
+        
+        声道分配:
+        - 左声道: 系统声音 (对方声音)
+        - 右声道: 麦克风 (我方声音)
+        """
+        if not self.system_frames and not self.mic_frames:
             return
         
         try:
-            # 合并所有音频帧
-            audio_data = np.concatenate(self.frames, axis=0)
+            # 合并帧数据
+            if self.system_frames:
+                system_data = np.concatenate(self.system_frames, axis=0)
+                # 如果是双声道，转换为单声道 (取平均)
+                if len(system_data.shape) > 1 and system_data.shape[1] > 1:
+                    system_data = np.mean(system_data, axis=1, keepdims=True)
+            else:
+                system_data = None
+            
+            if self.mic_frames:
+                mic_data = np.concatenate(self.mic_frames, axis=0)
+                # 如果是双声道，转换为单声道
+                if len(mic_data.shape) > 1 and mic_data.shape[1] > 1:
+                    mic_data = np.mean(mic_data, axis=1, keepdims=True)
+            else:
+                mic_data = None
+            
+            # 确定最终长度（取较长的）
+            if system_data is not None and mic_data is not None:
+                max_len = max(len(system_data), len(mic_data))
+                # 填充较短的数组
+                if len(system_data) < max_len:
+                    padding = np.zeros((max_len - len(system_data), 1), dtype=np.int16)
+                    system_data = np.concatenate([system_data, padding], axis=0)
+                if len(mic_data) < max_len:
+                    padding = np.zeros((max_len - len(mic_data), 1), dtype=np.int16)
+                    mic_data = np.concatenate([mic_data, padding], axis=0)
+                
+                # 组合成双声道: [左声道(系统), 右声道(麦克风)]
+                stereo_data = np.concatenate([system_data, mic_data], axis=1)
+                
+            elif system_data is not None:
+                # 只有系统声音，复制成双声道
+                stereo_data = np.concatenate([system_data, system_data], axis=1)
+                
+            elif mic_data is not None:
+                # 只有麦克风，复制成双声道
+                stereo_data = np.concatenate([mic_data, mic_data], axis=1)
+            else:
+                raise RuntimeError("没有音频数据可保存")
             
             # 确保输出目录存在
             os.makedirs(os.path.dirname(self.current_filepath) or '.', exist_ok=True)
             
             # 保存为 WAV
             with wave.open(self.current_filepath, 'wb') as wf:
-                wf.setnchannels(self.channels)
+                wf.setnchannels(2)  # 双声道立体声
                 wf.setsampwidth(2)  # 16-bit = 2 bytes
                 wf.setframerate(self.sample_rate)
-                wf.writeframes(audio_data.tobytes())
+                wf.writeframes(stereo_data.astype(np.int16).tobytes())
             
             print(f"录音已保存: {self.current_filepath}")
             print(f"文件大小: {os.path.getsize(self.current_filepath) / 1024:.1f} KB")
+            print(f"格式: 双声道立体声 (左=对方, 右=我方)")
             
         except Exception as e:
             print(f"保存录音失败: {e}")
@@ -542,20 +610,9 @@ class WeChatCallDetector:
                             found_processes.append(f"{proc_name} (PID: {proc.info['pid']})")
                             return True
             
-            # 调试信息：如果没有找到，打印所有进程名
-            if not found_processes:
-                print("调试：未找到微信进程，当前运行的进程包括:")
-                for proc in psutil.process_iter(['name']):
-                    if proc.info['name'] and 'wechat' in proc.info['name'].lower():
-                        print(f"  - {proc.info['name']}")
-            else:
-                print(f"找到微信进程: {found_processes}")
-            
             return len(found_processes) > 0
         except Exception as e:
             print(f"检查进程失败: {e}")
-            import traceback
-            traceback.print_exc()
             return False
     
     def _check_call_status(self) -> bool:
