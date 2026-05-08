@@ -97,48 +97,40 @@ class AudioRecorder:
             system_device = None
             mic_device = None
             
-            # Windows 平台：查找 Loopback 设备和麦克风
+            # Windows 平台：使用 WASAPI Loopback
             if os.name == 'nt' and wasapi_index is not None:
-                print(f"[_get_audio_devices] Windows 平台，查找音频设备...")
+                print(f"[_get_audio_devices] Windows 平台，使用 WASAPI Loopback...")
                 
-                # 列出所有 WASAPI 设备
-                for device in devices:
-                    if device.get('hostapi') == wasapi_index:
-                        device_name = device.get('name', '')
-                        max_in = device.get('max_input_channels', 0)
-                        max_out = device.get('max_output_channels', 0)
-                        print(f"  - {device_name} (index={device['index']}, in={max_in}, out={max_out})")
+                # 获取默认输出设备 (扬声器/耳机)
+                try:
+                    default_output = sd.query_devices(kind='output')
+                    if default_output:
+                        system_device = default_output
+                        print(f"[_get_audio_devices] 系统输出设备: {system_device.get('name', 'Unknown')} (ID={system_device['index']})")
+                        print(f"  - 将使用 WASAPI Loopback 模式录制此设备")
+                except Exception as e:
+                    print(f"[_get_audio_devices] 获取默认输出设备失败: {e}")
                 
-                # 1. 查找 Loopback 设备 (系统输出)
-                for device in devices:
-                    if device.get('hostapi') == wasapi_index:
-                        device_name = device.get('name', '')
-                        if 'Loopback' in device_name:
-                            system_device = device
-                            print(f"[_get_audio_devices] 找到系统 Loopback 设备: {device_name}")
-                            break
-                
-                # 2. 查找麦克风输入设备
+                # 获取默认输入设备 (麦克风)
                 try:
                     default_input = sd.query_devices(kind='input')
                     if default_input:
                         mic_device = default_input
-                        print(f"[_get_audio_devices] 找到麦克风: {mic_device.get('name', 'Unknown')}")
+                        print(f"[_get_audio_devices] 麦克风设备: {mic_device.get('name', 'Unknown')} (ID={mic_device['index']})")
                 except Exception as e:
-                    print(f"[_get_audio_devices] 查找麦克风失败: {e}")
+                    print(f"[_get_audio_devices] 获取麦克风失败: {e}")
             
-            # 如果找不到 Loopback，尝试使用默认输入
+            # 非 Windows 平台或找不到 WASAPI
             if not system_device:
-                print(f"[_get_audio_devices] 未找到 Loopback，尝试使用默认输入...")
+                print(f"[_get_audio_devices] 非 Windows 平台，尝试使用默认输入...")
                 try:
                     default_input = sd.query_devices(kind='input')
                     if default_input:
                         system_device = default_input
-                        print(f"[_get_audio_devices] 使用默认输入作为系统声音: {system_device.get('name', 'Unknown')}")
+                        print(f"[_get_audio_devices] 使用默认输入: {system_device.get('name', 'Unknown')}")
                 except Exception as e:
                     print(f"[_get_audio_devices] 失败: {e}")
             
-            # 如果找不到麦克风，使用系统设备作为后备
             if not mic_device:
                 print(f"[_get_audio_devices] 未找到麦克风，将只录制系统声音")
             
@@ -159,14 +151,18 @@ class AudioRecorder:
             if not system_device:
                 raise RuntimeError("未找到系统音频设备")
             
+            # 检查是否是 Windows 平台
+            is_windows = os.name == 'nt'
+            
+            # ===== 系统声音录制 (对方声音) =====
             system_id = system_device['index']
             print(f"[_record_audio] 系统设备: {system_device.get('name', 'Unknown')} (ID={system_id})")
             
             # 系统声音回调
             def system_callback(indata, frames, time_info, status):
                 try:
-                    if status:
-                        print(f"[系统音频] 状态警告: {status}")
+                    if status and str(status) not in ['input overflow', '']:
+                        print(f"[系统音频] 状态: {status}")
                     
                     if self.is_recording and not self.is_paused:
                         # 转换为 int16 并存储
@@ -179,26 +175,56 @@ class AudioRecorder:
             # 打开系统音频流
             print(f"[_record_audio] 打开系统音频流...")
             system_channels = min(2, system_device.get('max_input_channels', 2))
-            system_stream = sd.InputStream(
-                device=system_id,
-                channels=system_channels,
-                samplerate=self.sample_rate,
-                dtype=np.float32,
-                blocksize=self.chunk_size,
-                callback=system_callback
-            )
+            
+            # Windows 平台: 使用 WASAPI Loopback 模式
+            if is_windows:
+                print(f"[_record_audio] 使用 WASAPI Loopback 模式录制系统输出")
+                try:
+                    import sounddevice as sd_module
+                    # 尝试使用 WASAPI Loopback 模式
+                    system_stream = sd.InputStream(
+                        device=system_id,
+                        channels=system_channels,
+                        samplerate=self.sample_rate,
+                        dtype=np.float32,
+                        blocksize=self.chunk_size,
+                        callback=system_callback,
+                        extra_settings=sd_module.WasapiSettings(loopback=True)
+                    )
+                except Exception as e:
+                    print(f"[_record_audio] WASAPI Loopback 失败: {e}")
+                    print(f"[_record_audio] 回退到标准模式...")
+                    system_stream = sd.InputStream(
+                        device=system_id,
+                        channels=system_channels,
+                        samplerate=self.sample_rate,
+                        dtype=np.float32,
+                        blocksize=self.chunk_size,
+                        callback=system_callback
+                    )
+            else:
+                # 非 Windows 平台
+                system_stream = sd.InputStream(
+                    device=system_id,
+                    channels=system_channels,
+                    samplerate=self.sample_rate,
+                    dtype=np.float32,
+                    blocksize=self.chunk_size,
+                    callback=system_callback
+                )
+            
             system_stream.start()
             print(f"[_record_audio] 系统音频流已启动: 声道={system_channels}")
             
-            # 如果有麦克风，同时录制
+            # ===== 麦克风录制 (我方声音) =====
             if mic_device:
                 mic_id = mic_device['index']
                 print(f"[_record_audio] 麦克风设备: {mic_device.get('name', 'Unknown')} (ID={mic_id})")
                 
                 def mic_callback(indata, frames, time_info, status):
                     try:
-                        if status:
-                            print(f"[麦克风] 状态警告: {status}")
+                        if status and str(status) not in ['input overflow', '']:
+                            print(f"[麦克风] 状态: {status}")
                         
                         if self.is_recording and not self.is_paused:
                             audio_data = (indata * 32767).astype(np.int16)
@@ -226,12 +252,19 @@ class AudioRecorder:
             
             # 主循环
             loop_count = 0
+            last_system_count = 0
+            last_mic_count = 0
+            
             while self.is_recording:
                 loop_count += 1
-                if loop_count <= 5:
-                    print(f"[_record_audio] 录音中... 系统帧={len(self.system_frames)}, 麦克风帧={len(self.mic_frames)}")
-                elif loop_count == 6:
-                    print(f"[_record_audio] 录音持续进行中...")
+                
+                # 每 10 秒输出一次统计
+                if loop_count % 100 == 0:
+                    system_new = len(self.system_frames) - last_system_count
+                    mic_new = len(self.mic_frames) - last_mic_count
+                    print(f"[_record_audio] 录音中... 系统帧={len(self.system_frames)}(+{system_new}), 麦克风帧={len(self.mic_frames)}(+{mic_new})")
+                    last_system_count = len(self.system_frames)
+                    last_mic_count = len(self.mic_frames)
                 
                 if not self.is_paused:
                     elapsed = time.time() - self.start_time - self.total_pause_duration
