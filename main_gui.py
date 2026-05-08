@@ -407,6 +407,16 @@ class WeChatRecorderGUI(QMainWindow):
         """开始录音"""
         self._log_message("[_start_recording] 准备开始录音...")
         try:
+            # 检查并重置监控线程
+            if self.recording_monitor and self.recording_monitor.isRunning():
+                self._log_message("[_start_recording] 等待上一个监控线程结束...")
+                self.recording_monitor.stop()
+                self.recording_monitor.wait(2000)  # 等待2秒
+            
+            # 重新创建监控线程（确保状态清洁）
+            self.recording_monitor = RecordingMonitor(self.recorder)
+            self.recording_monitor.duration_updated.connect(self._update_duration_display)
+            
             self._log_message(f"[_start_recording] 调用 recorder.start_recording()...")
             filepath = self.recorder.start_recording()
             self._log_message(f"[_start_recording] start_recording 返回: {filepath}")
@@ -469,11 +479,18 @@ class WeChatRecorderGUI(QMainWindow):
         finally:
             # 停止监控线程
             self._log_message("[_stop_recording] 停止监控线程...")
-            self.recording_monitor.stop()
-            self.recording_monitor.wait(1000)  # 等待最多1秒
-            # 重新创建监控线程以便下次使用
+            if self.recording_monitor:
+                self.recording_monitor.stop()
+                # 等待线程完全结束，设置超时为3秒
+                if not self.recording_monitor.wait(3000):
+                    self._log_message("[_stop_recording] 警告: 监控线程未在3秒内结束")
+                else:
+                    self._log_message("[_stop_recording] 监控线程已正常结束")
+            
+            # 清理并重新创建监控线程，为下一次录音做准备
             self.recording_monitor = RecordingMonitor(self.recorder)
             self.recording_monitor.duration_updated.connect(self._update_duration_display)
+            
             # 无论成功与否，都更新界面状态
             self._update_recording_status("stopped")
     
@@ -639,9 +656,6 @@ class WeChatRecorderGUI(QMainWindow):
             if reply == QMessageBox.StandardButton.Yes:
                 try:
                     self._stop_recording()
-                    # 等待录音监控线程完全结束
-                    if self.recording_monitor and self.recording_monitor.isRunning():
-                        self.recording_monitor.wait(3000)
                 except Exception as e:
                     self._log_message(f"停止录音时出错: {e}")
                 event.accept()
@@ -651,8 +665,9 @@ class WeChatRecorderGUI(QMainWindow):
                 event.ignore()
         else:
             # 确保录音监控线程已清理
-            if self.recording_monitor and self.recording_monitor.isRunning():
-                self.recording_monitor.wait(1000)
+            if self.recording_monitor:
+                self.recording_monitor.stop()
+                self.recording_monitor.wait(2000)
             event.accept()
 
 

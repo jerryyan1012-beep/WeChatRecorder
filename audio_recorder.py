@@ -150,6 +150,7 @@ class AudioRecorder:
     
     def _record_audio(self):
         """录音线程主函数"""
+        stream = None
         try:
             device, channels = self._get_default_loopback_device()
             device_id = device['index']
@@ -161,18 +162,19 @@ class AudioRecorder:
             print(f"[_record_audio] 采样率={self.sample_rate}, 声道数={channels}, 块大小={self.chunk_size}")
             print(f"[_record_audio] is_recording={self.is_recording}")
             
-            callback_count = [0]  # 使用列表来在闭包中修改
+            callback_count = 0  # 使用整数而非列表，避免闭包问题
             
             def audio_callback(indata, frames, time_info, status):
+                nonlocal callback_count  # 使用 nonlocal 而非列表
                 try:
-                    callback_count[0] += 1
+                    callback_count += 1
                     if status:
                         print(f"[_record_audio] 音频状态警告: {status}")
                     
                     # 打印前5次回调用于调试
-                    if callback_count[0] <= 5:
-                        print(f"[_record_audio] 回调 #{callback_count[0]}: is_recording={self.is_recording}, is_paused={self.is_paused}")
-                        print(f"[_record_audio] 回调 #{callback_count[0]}: indata shape={indata.shape}, dtype={indata.dtype}")
+                    if callback_count <= 5:
+                        print(f"[_record_audio] 回调 #{callback_count}: is_recording={self.is_recording}, is_paused={self.is_paused}")
+                        print(f"[_record_audio] 回调 #{callback_count}: indata shape={indata.shape}, dtype={indata.dtype}")
                     
                     if self.is_recording and not self.is_paused:
                         # 将音频数据转换为 int16
@@ -191,34 +193,35 @@ class AudioRecorder:
             
             print(f"[_record_audio] 正在打开音频流...")
             # 打开音频流
-            with sd.InputStream(
+            stream = sd.InputStream(
                 device=device_id,
                 channels=channels,
                 samplerate=self.sample_rate,
                 dtype=np.float32,
                 blocksize=self.chunk_size,
                 callback=audio_callback
-            ) as stream:
-                print(f"[_record_audio] 音频流已打开: active={stream.active}")
-                self._notify_status("recording")
+            )
+            stream.start()
+            print(f"[_record_audio] 音频流已打开: active={stream.active}")
+            self._notify_status("recording")
+            
+            loop_count = 0
+            while self.is_recording:
+                loop_count += 1
+                if loop_count <= 10:  # 前10次循环打印调试信息
+                    print(f"[_record_audio] 主循环 #{loop_count}: is_recording={self.is_recording}, frames={len(self.frames)}")
+                elif loop_count == 11:
+                    print(f"[_record_audio] 主循环继续运行中... (不再打印)")
                 
-                loop_count = 0
-                while self.is_recording:
-                    loop_count += 1
-                    if loop_count <= 10:  # 前10次循环打印调试信息
-                        print(f"[_record_audio] 主循环 #{loop_count}: is_recording={self.is_recording}, frames={len(self.frames)}")
-                    elif loop_count == 11:
-                        print(f"[_record_audio] 主循环继续运行中... (不再打印)")
-                    
-                    if not self.is_paused:
-                        # 计算录音时长
-                        elapsed = time.time() - self.start_time - self.total_pause_duration
-                        if self.on_duration_update:
-                            self.on_duration_update(elapsed)
-                    time.sleep(0.1)
+                if not self.is_paused:
+                    # 计算录音时长
+                    elapsed = time.time() - self.start_time - self.total_pause_duration
+                    if self.on_duration_update:
+                        self.on_duration_update(elapsed)
+                time.sleep(0.1)
+            
+            print(f"[_record_audio] 主循环结束，总循环次数={loop_count}, 总帧数={len(self.frames)}")
                 
-                print(f"[_record_audio] 主循环结束，总循环次数={loop_count}, 总帧数={len(self.frames)}")
-                    
         except Exception as e:
             error_msg = f"[_record_audio] 录音错误: {str(e)}"
             print(error_msg)
@@ -228,6 +231,16 @@ class AudioRecorder:
                 self.on_error(error_msg)
             self.is_recording = False
             self._notify_status("error")
+        finally:
+            # 确保音频流正确关闭
+            if stream is not None:
+                try:
+                    print("[_record_audio] 正在关闭音频流...")
+                    stream.stop()
+                    stream.close()
+                    print("[_record_audio] 音频流已关闭")
+                except Exception as e:
+                    print(f"[_record_audio] 关闭音频流时出错: {e}")
     
     def _notify_status(self, status: str):
         """通知状态变更"""
@@ -338,7 +351,20 @@ class AudioRecorder:
         else:
             print("警告: 没有采集到任何音频数据")
         
-        # 无论成功与否，都通知状态变更
+        # 清理帧数据释放内存（关键修复：防止内存泄漏）
+        print(f"[stop_recording] 清理帧数据，释放内存...")
+        self.frames = []
+        import gc
+        gc.collect()
+        print(f"[stop_recording] 内存已释放")
+        
+        # 重置其他状态变量
+        self.start_time = None
+        self.pause_start_time = None
+        self.total_pause_duration = 0.0
+        self.is_paused = False
+        
+        # 无论成否与否，都通知状态变更
         self._notify_status("stopped")
         
         if not saved:
