@@ -1,189 +1,159 @@
 """
-打包脚本 - 使用 PyInstaller 生成可执行文件
+构建脚本 - 生成带有版本信息和图标的 Windows EXE
 """
 import os
 import sys
 import subprocess
-import shutil
+import argparse
 
 
-def clean_build():
-    """清理构建目录"""
-    dirs_to_remove = ['build', 'dist', '__pycache__', '.pytest_cache']
-    files_to_remove = ['*.spec', '*.pyc']
-    
-    print("清理构建目录...")
-    
-    for dir_name in dirs_to_remove:
-        if os.path.exists(dir_name):
-            shutil.rmtree(dir_name)
-            print(f"  删除 {dir_name}/")
-    
-    import glob
-    for pattern in files_to_remove:
-        for file in glob.glob(pattern):
-            os.remove(file)
-            print(f"  删除 {file}")
+def create_icon():
+    """创建应用程序图标"""
+    try:
+        from PIL import Image, ImageDraw
+        
+        # 创建图标目录
+        os.makedirs('assets', exist_ok=True)
+        
+        # 创建 256x256 图标
+        size = 256
+        img = Image.new('RGBA', (size, size), color=(59, 130, 246, 255))
+        draw = ImageDraw.Draw(img)
+        
+        # 绘制简单的麦克风图标
+        mic_color = (255, 255, 255, 255)
+        center_x, center_y = size // 2, size // 2
+        
+        # 麦克风头
+        head_radius = 50
+        draw.ellipse([center_x - head_radius, center_y - 60 - head_radius,
+                      center_x + head_radius, center_y - 60 + head_radius], 
+                     fill=mic_color)
+        
+        # 麦克风身体
+        body_width, body_height = 40, 70
+        draw.rounded_rectangle([center_x - body_width//2, center_y - 60,
+                                center_x + body_width//2, center_y + 20],
+                               radius=10, fill=mic_color)
+        
+        # 底座
+        base_width, base_height = 80, 15
+        draw.rounded_rectangle([center_x - base_width//2, center_y + 50,
+                                center_x + base_width//2, center_y + 50 + base_height],
+                               radius=5, fill=mic_color)
+        
+        # 连接线
+        draw.rectangle([center_x - 8, center_y + 20, center_x + 8, center_y + 50], fill=mic_color)
+        
+        # 保存为多尺寸图标
+        icon_sizes = [(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)]
+        icon_images = []
+        
+        for icon_size in icon_sizes:
+            icon_img = img.resize(icon_size, Image.Resampling.LANCZOS)
+            icon_images.append(icon_img)
+        
+        # 保存 ICO 文件
+        ico_path = 'assets/icon.ico'
+        icon_images[0].save(ico_path, format='ICO', sizes=[(s[0], s[1]) for s in icon_sizes])
+        
+        print(f"✓ 图标已创建: {ico_path}")
+        return ico_path
+        
+    except ImportError:
+        print("⚠️ 未安装 Pillow，跳过图标创建")
+        return None
+    except Exception as e:
+        print(f"⚠️ 图标创建失败: {e}")
+        return None
 
 
-def build_exe(one_file=True, console=False):
-    """
-    构建可执行文件
+def build_exe(onefile=True, windowed=True, console=False):
+    """构建 EXE 文件"""
     
-    Args:
-        one_file: True=单文件模式, False=单目录模式
-        console: True=显示控制台窗口, False=仅 GUI
-    """
-    print("\n开始打包...")
+    # 确保资源目录存在
+    os.makedirs('assets', exist_ok=True)
     
-    # 基本参数
+    # 创建图标（如果不存在）
+    icon_path = 'assets/icon.ico'
+    if not os.path.exists(icon_path):
+        icon_path = create_icon()
+    
+    # 构建 PyInstaller 命令
     cmd = [
-        sys.executable, '-m', 'PyInstaller',
-        '--noconfirm',
-        '--clean',
+        'pyinstaller',
         '--name', 'WeChatRecorder',
+        '--clean',
     ]
     
-    # 单文件或单目录
-    if one_file:
+    if onefile:
         cmd.append('--onefile')
     else:
         cmd.append('--onedir')
     
-    # 是否显示控制台
-    if console:
-        cmd.append('--console')
-    else:
+    if windowed:
         cmd.append('--windowed')
     
-    # 隐藏导入
-    hidden_imports = [
-        'pyaudio',
-        'sounddevice',
-        'numpy',
-        'psutil',
-        'comtypes',
-        'PyQt6.sip',
-        'PyQt6.QtCore',
-        'PyQt6.QtGui',
-        'PyQt6.QtWidgets',
-    ]
+    if console:
+        cmd.append('--console')
     
-    for imp in hidden_imports:
-        cmd.extend(['--hidden-import', imp])
+    # 添加图标
+    if icon_path and os.path.exists(icon_path):
+        cmd.extend(['--icon', icon_path])
+        print(f"使用图标: {icon_path}")
     
-    # 数据文件
-    cmd.extend(['--add-data', 'recordings;recordings'])
+    # 添加版本信息
+    version_file = 'assets/version_info.txt'
+    if os.path.exists(version_file):
+        cmd.extend(['--version-file', version_file])
+        print(f"使用版本信息: {version_file}")
     
-    # 图标（如果有的话）
-    if os.path.exists('icon.ico'):
-        cmd.extend(['--icon', 'icon.ico'])
+    # 添加 PyQt6 依赖
+    cmd.extend([
+        '--collect-all', 'PyQt6',
+        '--collect-all', 'PyQt6-Qt6',
+    ])
     
-    # 主脚本
+    # 主程序
     cmd.append('main_gui.py')
     
-    # 执行打包
-    print(f"执行命令: {' '.join(cmd)}")
+    print(f"\n构建命令: {' '.join(cmd)}\n")
+    
+    # 执行构建
     result = subprocess.run(cmd)
     
     if result.returncode == 0:
-        print("\n✅ 打包成功!")
-        print(f"输出目录: {os.path.abspath('dist')}")
+        print("\n✅ 构建成功!")
+        exe_path = os.path.join('dist', 'WeChatRecorder.exe')
+        if os.path.exists(exe_path):
+            size = os.path.getsize(exe_path) / (1024 * 1024)
+            print(f"   输出: {exe_path}")
+            print(f"   大小: {size:.1f} MB")
     else:
-        print("\n❌ 打包失败!")
-        sys.exit(1)
-
-
-def create_installer():
-    """创建安装程序（需要 NSIS）"""
-    print("\n创建安装程序...")
+        print("\n❌ 构建失败")
+        return False
     
-    nsis_script = """
-; NSIS 安装脚本
-Name "微信通话录音软件"
-OutFile "WeChatRecorder_Setup.exe"
-InstallDir "$PROGRAMFILES\\WeChatRecorder"
-RequestExecutionLevel admin
-
-Page directory
-Page instfiles
-
-Section "Install"
-    SetOutPath $INSTDIR
-    File /r "dist\\WeChatRecorder\\*"
-    
-    ; 创建开始菜单快捷方式
-    CreateDirectory "$SMPROGRAMS\\WeChatRecorder"
-    CreateShortcut "$SMPROGRAMS\\WeChatRecorder\\WeChatRecorder.lnk" "$INSTDIR\\WeChatRecorder.exe"
-    CreateShortcut "$SMPROGRAMS\\WeChatRecorder\\Uninstall.lnk" "$INSTDIR\\uninstall.exe"
-    
-    ; 创建桌面快捷方式
-    CreateShortcut "$DESKTOP\\WeChatRecorder.lnk" "$INSTDIR\\WeChatRecorder.exe"
-    
-    ; 创建卸载程序
-    WriteUninstaller "$INSTDIR\\uninstall.exe"
-SectionEnd
-
-Section "Uninstall"
-    Delete "$INSTDIR\\*"
-    RMDir /r "$INSTDIR"
-    Delete "$SMPROGRAMS\\WeChatRecorder\\*"
-    RMDir "$SMPROGRAMS\\WeChatRecorder"
-    Delete "$DESKTOP\\WeChatRecorder.lnk"
-SectionEnd
-"""
-    
-    with open('installer.nsi', 'w', encoding='utf-8') as f:
-        f.write(nsis_script)
-    
-    # 检查 NSIS 是否安装
-    nsis_path = r"C:\Program Files (x86)\NSIS\makensis.exe"
-    if not os.path.exists(nsis_path):
-        nsis_path = "makensis"
-    
-    result = subprocess.run([nsis_path, 'installer.nsi'])
-    
-    if result.returncode == 0:
-        print("✅ 安装程序创建成功!")
-    else:
-        print("❌ 安装程序创建失败（可能需要安装 NSIS）")
+    return True
 
 
 def main():
-    """主函数"""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='微信通话录音软件打包脚本')
-    parser.add_argument('--clean', action='store_true', help='清理构建目录')
-    parser.add_argument('--onedir', action='store_true', help='单目录模式（默认单文件）')
+    parser = argparse.ArgumentParser(description='构建 WeChatRecorder EXE')
+    parser.add_argument('--onedir', action='store_true', help='使用目录模式而非单文件')
     parser.add_argument('--console', action='store_true', help='显示控制台窗口')
-    parser.add_argument('--installer', action='store_true', help='创建安装程序')
     
     args = parser.parse_args()
     
-    if args.clean:
-        clean_build()
-        return
+    print("🔧 WeChatRecorder 构建脚本")
+    print("=" * 50)
     
-    # 清理旧构建
-    clean_build()
+    success = build_exe(
+        onefile=not args.onedir,
+        windowed=not args.console,
+        console=args.console
+    )
     
-    # 构建
-    build_exe(one_file=not args.onedir, console=args.console)
-    
-    # 创建安装程序
-    if args.installer:
-        create_installer()
-    
-    print("\n" + "="*50)
-    print("构建完成!")
-    print("="*50)
-    print(f"输出位置: {os.path.abspath('dist')}")
-    print("\n使用说明:")
-    print("1. 将 dist/WeChatRecorder.exe 复制到目标电脑")
-    print("2. 双击运行即可")
-    print("3. 录音文件将保存在 recordings/ 目录")
+    return 0 if success else 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
