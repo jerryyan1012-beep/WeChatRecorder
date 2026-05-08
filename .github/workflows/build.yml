@@ -1,12 +1,14 @@
 name: Build WeChatRecorder
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号'
-        required: true
-        default: '1.0.0'
+        description: '版本号 (例如: 1.0.2)'
+        required: false
+        default: '1.0.2'
 
 jobs:
   build:
