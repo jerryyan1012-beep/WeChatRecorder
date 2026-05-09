@@ -53,6 +53,7 @@ class AudioRecorder:
         # 两个音频流的帧数据
         self.system_frames = []  # 系统声音帧 (对方)
         self.mic_frames = []     # 麦克风声音帧 (我方)
+        self.frames_lock = threading.Lock()  # 保护帧数据的锁
         
         self.recording_thread: Optional[threading.Thread] = None
         self.start_time: Optional[float] = None
@@ -192,7 +193,8 @@ class AudioRecorder:
                     if self.is_recording and not self.is_paused:
                         # 转换为 int16 并存储
                         audio_data = (indata * 32767).astype(np.int16)
-                        self.system_frames.append(audio_data.copy())
+                        with self.frames_lock:
+                            self.system_frames.append(audio_data.copy())
                 except Exception as e:
                     error_msg = f"[系统音频] 回调错误: {str(e)}"
                     print(error_msg)
@@ -253,7 +255,8 @@ class AudioRecorder:
                         
                         if self.is_recording and not self.is_paused:
                             audio_data = (indata * 32767).astype(np.int16)
-                            self.mic_frames.append(audio_data.copy())
+                            with self.frames_lock:
+                                self.mic_frames.append(audio_data.copy())
                     except Exception as e:
                         error_msg = f"[麦克风] 回调错误: {str(e)}"
                         print(error_msg)
@@ -476,21 +479,26 @@ class AudioRecorder:
         - 左声道: 系统声音 (对方声音)
         - 右声道: 麦克风 (我方声音)
         """
-        if not self.system_frames and not self.mic_frames:
+        # 在锁内获取帧数据副本
+        with self.frames_lock:
+            system_frames_copy = self.system_frames.copy()
+            mic_frames_copy = self.mic_frames.copy()
+        
+        if not system_frames_copy and not mic_frames_copy:
             return
         
         try:
             # 合并帧数据
-            if self.system_frames:
-                system_data = np.concatenate(self.system_frames, axis=0)
+            if system_frames_copy:
+                system_data = np.concatenate(system_frames_copy, axis=0)
                 # 如果是双声道，转换为单声道 (取平均)
                 if len(system_data.shape) > 1 and system_data.shape[1] > 1:
                     system_data = np.mean(system_data, axis=1, keepdims=True)
             else:
                 system_data = None
             
-            if self.mic_frames:
-                mic_data = np.concatenate(self.mic_frames, axis=0)
+            if mic_frames_copy:
+                mic_data = np.concatenate(mic_frames_copy, axis=0)
                 # 如果是双声道，转换为单声道
                 if len(mic_data.shape) > 1 and mic_data.shape[1] > 1:
                     mic_data = np.mean(mic_data, axis=1, keepdims=True)

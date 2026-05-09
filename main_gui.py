@@ -595,14 +595,6 @@ class WeChatRecorderGUI(QMainWindow):
         except Exception as e:
             self._log_message(f"转换 MP3 失败: {str(e)}")
     
-    def _toggle_auto_record(self, state):
-        """切换自动录音"""
-        self.auto_record_enabled = state == Qt.CheckState.Checked.value
-        if self.auto_record_enabled:
-            self._log_message("自动录音已启用")
-        else:
-            self._log_message("自动录音已禁用")
-    
     def _on_call_detected_start(self):
         """检测到通话开始"""
         self._log_message("检测到微信通话开始")
@@ -675,10 +667,17 @@ class WeChatRecorderGUI(QMainWindow):
         else:
             self._log_message("已取消开机自动启动")
     
-    def _toggle_auto_record(self, checked):
-        """切换自动录音"""
-        self.auto_record_enabled = checked
-        if checked:
+    def _toggle_auto_record(self, state):
+        """切换自动录音 - 处理 QAction triggered 和 QCheckBox stateChanged 两种信号"""
+        # 处理不同来源的参数类型
+        if isinstance(state, bool):
+            # 来自 QAction triggered(bool)
+            self.auto_record_enabled = state
+        else:
+            # 来自 QCheckBox stateChanged(int) 或 Qt.CheckState
+            self.auto_record_enabled = (state == Qt.CheckState.Checked.value or state == 2)
+        
+        if self.auto_record_enabled:
             self._log_message("已启用自动检测通话录音")
         else:
             self._log_message("已禁用自动检测通话录音")
