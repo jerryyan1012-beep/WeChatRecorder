@@ -72,9 +72,9 @@ class AudioRecorder:
         self.system_device = None  # 系统输出设备 (Loopback)
         self.mic_device = None     # 麦克风输入设备
         
-    def _get_audio_devices(self) -> tuple:
+    def _get_audio_devices(self):
         """
-        获取音频设备
+        获取音频设备 - 在 Windows 上使用 WASAPI Loopback 模式
         
         Returns:
             (system_device, mic_device) 系统输出设备和麦克风设备
@@ -83,7 +83,16 @@ class AudioRecorder:
             print(f"[_get_audio_devices] 开始查询音频设备...")
             print(f"[_get_audio_devices] sounddevice 版本: {sd.__version__}")
             
-            devices = sd.query_devices()
+            # 检查 PortAudio 是否可用
+            try:
+                devices = sd.query_devices()
+            except Exception as e:
+                print(f"[_get_audio_devices] 错误: 无法查询音频设备")
+                print(f"  详情: {e}")
+                print(f"  可能原因: PortAudio 库未正确加载")
+                print(f"  建议: 检查是否安装了音频驱动，或尝试重新启动程序")
+                raise RuntimeError(f"音频库未正确加载，请检查系统音频驱动: {e}")
+            
             hostapis = sd.query_hostapis()
             
             print(f"[_get_audio_devices] 可用设备数: {len(devices)}")
@@ -365,11 +374,20 @@ class AudioRecorder:
         self.recording_thread.daemon = True
         self.recording_thread.start()
         
-        # 等待一点时间确保线程启动，如果立即失败会设置 is_recording=False
-        time.sleep(0.1)
-        if not self.is_recording:
-            # 线程启动立即失败
-            raise RuntimeError("录音线程启动失败，请检查日志确认音频设备是否可用")
+        # 等待线程初始化（最多2秒）
+        # 如果线程内部发生异常，is_recording 会被设为 False
+        wait_count = 0
+        max_wait = 20  # 2秒 (20 * 0.1s)
+        startup_failed = False
+        while wait_count < max_wait:
+            if not self.is_recording:
+                startup_failed = True
+                break
+            time.sleep(0.1)
+            wait_count += 1
+        
+        if startup_failed:
+            raise RuntimeError("录音线程启动失败，请查看黑底控制台输出确认音频设备是否可用")
         
         print(f"录音线程已启动")
         
