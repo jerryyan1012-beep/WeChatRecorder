@@ -31,6 +31,32 @@ from PyQt6.QtGui import QAction, QIcon, QFont
 from audio_recorder import AudioRecorder, WeChatCallDetector
 
 
+def check_audio_dependencies():
+    """检查音频依赖库是否正确加载"""
+    errors = []
+    
+    # 检查 sounddevice
+    try:
+        import sounddevice as sd
+        print(f"sounddevice 版本: {sd.__version__}")
+        # 尝试查询设备
+        devices = sd.query_devices()
+        print(f"音频设备数量: {len(devices)}")
+    except Exception as e:
+        errors.append(f"sounddevice 加载失败: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # 检查 numpy
+    try:
+        import numpy as np
+        print(f"numpy 版本: {np.__version__}")
+    except Exception as e:
+        errors.append(f"numpy 加载失败: {e}")
+    
+    return errors
+
+
 class RecordingMonitor(QThread):
     """录音监控线程 - 用于更新 UI"""
     duration_updated = pyqtSignal(float)
@@ -682,7 +708,18 @@ class WeChatRecorderGUI(QMainWindow):
 
 
 def main():
-    """主函数"""
+    # 检查音频依赖
+    print("检查音频依赖库...")
+    dep_errors = check_audio_dependencies()
+    if dep_errors:
+        print("\n❌ 依赖库检查失败:")
+        for error in dep_errors:
+            print(f"  - {error}")
+        # 仍然继续启动，但是会在界面中显示错误
+    else:
+        print("✓ 所有依赖库检查通过\n")
+    
+    # 创建应用
     # 启用高 DPI 支持
     if hasattr(Qt, 'AA_EnableHighDpiScaling'):
         QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)

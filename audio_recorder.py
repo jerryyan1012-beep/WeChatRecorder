@@ -80,6 +80,9 @@ class AudioRecorder:
             (system_device, mic_device) 系统输出设备和麦克风设备
         """
         try:
+            print(f"[_get_audio_devices] 开始查询音频设备...")
+            print(f"[_get_audio_devices] sounddevice 版本: {sd.__version__}")
+            
             devices = sd.query_devices()
             hostapis = sd.query_hostapis()
             
@@ -98,8 +101,8 @@ class AudioRecorder:
             mic_device = None
             
             # Windows 平台：使用 WASAPI Loopback
-            if os.name == 'nt' and wasapi_index is not None:
-                print(f"[_get_audio_devices] Windows 平台，使用 WASAPI Loopback...")
+            if os.name == 'nt':
+                print(f"[_get_audio_devices] Windows 平台，尝试使用 WASAPI Loopback...")
                 
                 # 获取默认输出设备 (扬声器/耳机)
                 try:
@@ -110,6 +113,8 @@ class AudioRecorder:
                         print(f"  - 将使用 WASAPI Loopback 模式录制此设备")
                 except Exception as e:
                     print(f"[_get_audio_devices] 获取默认输出设备失败: {e}")
+                    import traceback
+                    traceback.print_exc()
                 
                 # 获取默认输入设备 (麦克风)
                 try:
@@ -119,6 +124,8 @@ class AudioRecorder:
                         print(f"[_get_audio_devices] 麦克风设备: {mic_device.get('name', 'Unknown')} (ID={mic_device['index']})")
                 except Exception as e:
                     print(f"[_get_audio_devices] 获取麦克风失败: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             # 非 Windows 平台或找不到 WASAPI
             if not system_device:
@@ -130,6 +137,8 @@ class AudioRecorder:
                         print(f"[_get_audio_devices] 使用默认输入: {system_device.get('name', 'Unknown')}")
                 except Exception as e:
                     print(f"[_get_audio_devices] 失败: {e}")
+                    import traceback
+                    traceback.print_exc()
             
             if not mic_device:
                 print(f"[_get_audio_devices] 未找到麦克风，将只录制系统声音")

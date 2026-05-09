@@ -113,6 +113,11 @@ def build_exe(onefile=True, windowed=True, console=False):
         '--collect-all', 'PyQt6',
         '--collect-all', 'PyQt6-Qt6',
         '--collect-all', 'sounddevice',
+        '--collect-all', 'numpy',
+        '--hidden-import', 'sounddevice',
+        '--hidden-import', 'numpy',
+        '--hidden-import', '_sounddevice_data',
+        '--hidden-import', '_sounddevice',
     ])
     
     # 主程序
