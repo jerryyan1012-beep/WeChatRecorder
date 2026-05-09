@@ -8,6 +8,44 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 import platform
+import traceback
+
+# 设置日志文件
+LOG_FILE = None
+
+def init_logging():
+    """初始化日志记录，将输出重定向到文件"""
+    global LOG_FILE
+    try:
+        log_dir = os.path.join(get_app_root(), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        LOG_FILE = os.path.join(log_dir, f"wechat_recorder_{timestamp}.log")
+        
+        # 创建日志文件
+        with open(LOG_FILE, 'w', encoding='utf-8') as f:
+            f.write(f"WeChatRecorder 启动\n")
+            f.write(f"时间: {datetime.now()}\n")
+            f.write(f"Python: {sys.version}\n")
+            f.write(f"平台: {platform.platform()}\n")
+            f.write("="*50 + "\n")
+        
+        print(f"日志文件: {LOG_FILE}")
+        return True
+    except Exception as e:
+        print(f"创建日志文件失败: {e}")
+        return False
+
+def log_to_file(message):
+    """将消息写入日志文件"""
+    global LOG_FILE
+    if LOG_FILE:
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as f:
+                f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {message}\n")
+                f.flush()
+        except:
+            pass
 
 # 获取应用程序根目录（处理 PyInstaller 打包后的路径）
 def get_app_root():
@@ -666,7 +704,10 @@ class WeChatRecorderGUI(QMainWindow):
     def _log_message(self, message: str):
         """添加日志消息"""
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_text.append(f"[{timestamp}] {message}")
+        log_entry = f"[{timestamp}] {message}"
+        self.log_text.append(log_entry)
+        # 同时写入日志文件
+        log_to_file(message)
     
     def closeEvent(self, event):
         """关闭事件处理"""
