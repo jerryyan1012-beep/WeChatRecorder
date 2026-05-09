@@ -43,3 +43,19 @@ jobs:
       with:
         name: WeChatRecorder-EXE
         path: dist/WeChatRecorder.exe
+    
+    - name: Upload to Release
+      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.2
+        files: dist/WeChatRecorder.exe
+        body: |
+          WeChatRecorder v1.0.2
+          
+          修复内容:
+          - 修复录制多次后崩溃的问题
+          - 修复WASAPI Loopback录音
+          - 添加详细日志输出
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
