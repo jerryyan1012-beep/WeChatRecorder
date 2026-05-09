@@ -365,6 +365,13 @@ class AudioRecorder:
         self.recording_thread.daemon = True
         self.recording_thread.start()
         
+        # 等待一点时间确保线程启动，如果立即失败会设置 is_recording=False
+        import time
+        time.sleep(0.1)
+        if not self.is_recording:
+            # 线程启动立即失败
+            raise RuntimeError("录音线程启动失败，请检查日志确认音频设备是否可用")
+        
         print(f"录音线程已启动")
         
         return self.current_filepath

@@ -456,16 +456,7 @@ class WeChatRecorderGUI(QMainWindow):
             self._log_message("[_start_recording] 启动监控线程...")
             self.recording_monitor.start()
             
-            # 延迟检查录音线程是否真的启动了
-            import time
-            time.sleep(0.5)
-            if not self.recorder.is_recording:
-                self._log_message("[_start_recording] 警告: 录音线程未能正常启动")
-                QMessageBox.warning(self, "警告", "录音线程启动失败，请检查音频设备")
-                self._update_recording_status("stopped")
-                return
-            
-            self._log_message(f"[_start_recording] 录音启动完成，录音中: {self.recorder.is_recording}")
+            self._log_message(f"[_start_recording] 录音启动完成")
             
         except Exception as e:
             self._log_message(f"[_start_recording] 异常: {str(e)}")
