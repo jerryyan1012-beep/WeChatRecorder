@@ -366,7 +366,6 @@ class AudioRecorder:
         self.recording_thread.start()
         
         # 等待一点时间确保线程启动，如果立即失败会设置 is_recording=False
-        import time
         time.sleep(0.1)
         if not self.is_recording:
             # 线程启动立即失败
