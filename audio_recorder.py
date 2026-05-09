@@ -46,9 +46,10 @@ class AudioRecorder:
         # 确保输出目录存在
         os.makedirs(output_dir, exist_ok=True)
         
-        # 录音状态
+        # 录音状态 - 使用 Event 确保线程安全
         self.is_recording = False
         self.is_paused = False
+        self._stop_event = threading.Event()  # 用于线程安全退出
         
         # 两个音频流的帧数据
         self.system_frames = []  # 系统声音帧 (对方)
@@ -278,12 +279,12 @@ class AudioRecorder:
             
             self._notify_status("recording")
             
-            # 主循环
+            # 主循环 - 使用 Event 等待更高效
             loop_count = 0
             last_system_count = 0
             last_mic_count = 0
             
-            while self.is_recording:
+            while not self._stop_event.is_set():
                 loop_count += 1
                 
                 # 每 10 秒输出一次统计
@@ -299,7 +300,8 @@ class AudioRecorder:
                     if self.on_duration_update:
                         self.on_duration_update(elapsed)
                 
-                time.sleep(0.1)
+                # 使用 Event 等待，支持立即退出
+                self._stop_event.wait(0.1)
             
             print(f"[_record_audio] 录音结束，总循环次数={loop_count}")
             print(f"[_record_audio] 系统帧数: {len(self.system_frames)}, 麦克风帧数: {len(self.mic_frames)}")
@@ -367,6 +369,7 @@ class AudioRecorder:
         self.mic_frames = []
         self.is_recording = True
         self.is_paused = False
+        self._stop_event.clear()  # 清除停止信号
         self.start_time = time.time()
         self.total_pause_duration = 0.0
         
@@ -390,6 +393,16 @@ class AudioRecorder:
             wait_count += 1
         
         if startup_failed:
+            # 启动失败，清理线程引用避免资源泄漏
+            print("录音线程启动失败，正在清理...")
+            self._stop_event.set()  # 发出停止信号
+            if self.recording_thread and self.recording_thread.is_alive():
+                try:
+                    self.recording_thread.join(timeout=1.0)
+                except:
+                    pass
+            self.recording_thread = None
+            self.is_recording = False
             raise RuntimeError("录音线程启动失败，请查看黑底控制台输出确认音频设备是否可用")
         
         print(f"录音线程已启动")
@@ -421,9 +434,11 @@ class AudioRecorder:
         """
         if not self.is_recording:
             print("警告: stop_recording 被调用但没有正在进行的录音")
-            self._notify_status("stopped")
+            self._notify_status("已停止")
             raise RuntimeError("没有正在进行的录音")
         
+        # 发出停止信号 - 线程安全
+        self._stop_event.set()
         self.is_recording = False
         
         # 等待录音线程结束

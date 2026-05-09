@@ -37,15 +37,29 @@ def init_logging():
         return False
 
 def log_to_file(message):
-    """将消息写入日志文件"""
+    """将消息写入日志文件（带日志轮转）"""
     global LOG_FILE
-    if LOG_FILE:
-        try:
-            with open(LOG_FILE, 'a', encoding='utf-8') as f:
-                f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {message}\n")
-                f.flush()
-        except:
-            pass
+    if not LOG_FILE:
+        return
+    
+    try:
+        # 检查日志文件大小（限制为 10MB）
+        MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > MAX_LOG_SIZE:
+            # 日志轮转：重命名旧日志并创建新日志
+            backup_log = LOG_FILE + ".old"
+            try:
+                if os.path.exists(backup_log):
+                    os.remove(backup_log)
+                os.rename(LOG_FILE, backup_log)
+            except:
+                pass  # 如果轮转失败，继续写入
+        
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {message}\n")
+            f.flush()
+    except:
+        pass
 
 # 获取应用程序根目录（处理 PyInstaller 打包后的路径）
 def get_app_root():
@@ -560,38 +574,15 @@ class WeChatRecorderGUI(QMainWindow):
             self._update_recording_status("stopped")
     
     def _convert_to_mp3(self, wav_path: str):
-        """转换为 MP3"""
-        import pathlib
-        
+        """转换为 MP3 - 使用 audio_recorder 中的方法"""
         try:
-            # 路径验证 - 防止命令注入
-            wav_path_obj = pathlib.Path(wav_path).resolve()
-            if not wav_path_obj.exists():
-                raise RuntimeError(f"WAV 文件不存在: {wav_path}")
-            if not wav_path_obj.suffix.lower() == '.wav':
-                raise RuntimeError(f"文件必须是 WAV 格式: {wav_path}")
-            
-            mp3_path = str(wav_path_obj.with_suffix('.mp3'))
             self._log_message(f"正在转换为 MP3...")
-            
-            # 使用列表传参避免命令注入
-            cmd = [
-                'ffmpeg', '-i', str(wav_path_obj),
-                '-codec:a', 'libmp3lame',
-                '-qscale:a', '2',
-                '-y', mp3_path
-            ]
-            
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                self._log_message(f"MP3 转换完成: {mp3_path}")
-                # 删除原始 WAV
+            mp3_path = self.recorder.convert_to_mp3(wav_path)
+            self._log_message(f"MP3 转换完成: {mp3_path}")
+            # 删除原始 WAV
+            if os.path.exists(wav_path):
                 os.remove(wav_path)
                 self._log_message("已删除原始 WAV 文件")
-            else:
-                self._log_message(f"MP3 转换失败: {result.stderr}")
-                
         except Exception as e:
             self._log_message(f"转换 MP3 失败: {str(e)}")
     
