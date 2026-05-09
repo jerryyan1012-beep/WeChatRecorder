@@ -112,6 +112,7 @@ def build_exe(onefile=True, windowed=True, console=False):
     cmd.extend([
         '--collect-all', 'PyQt6',
         '--collect-all', 'PyQt6-Qt6',
+        '--collect-all', 'sounddevice',
     ])
     
     # 主程序

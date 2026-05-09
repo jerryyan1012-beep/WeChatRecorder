@@ -35,7 +35,7 @@ jobs:
         # 构建带有版本信息的 EXE
         pyinstaller --onefile --windowed --name WeChatRecorder `
           --version-file="assets/version_info.txt" `
-          --collect-all PyQt6 --collect-all PyQt6-Qt6 main_gui.py
+          --collect-all PyQt6 --collect-all PyQt6-Qt6 --collect-all sounddevice main_gui.py
       shell: pwsh
     
     - name: Upload artifact

@@ -144,12 +144,19 @@ class AudioRecorder:
         system_stream = None
         mic_stream = None
         
+        print(f"[_record_audio] 录音线程已启动")
+        print(f"[_record_audio] 录音状态: is_recording={self.is_recording}")
+        
         try:
             # 获取设备
+            print(f"[_record_audio] 正在获取音频设备...")
             system_device, mic_device = self._get_audio_devices()
             
             if not system_device:
+                print(f"[_record_audio] 错误: 未找到系统音频设备")
                 raise RuntimeError("未找到系统音频设备")
+            
+            print(f"[_record_audio] 设备获取成功")
             
             # 检查是否是 Windows 平台
             is_windows = os.name == 'nt'
